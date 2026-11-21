@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sandeep.imghunt.data.AppPrefs
+import com.sandeep.imghunt.data.DownloadPipeline
 import com.sandeep.imghunt.engine.PhotoItem
 import com.sandeep.imghunt.engine.PhotoSources
 import com.sandeep.imghunt.engine.ProviderResult
@@ -27,18 +28,23 @@ class HuntViewModel(app: Application) : AndroidViewModel(app) {
     var filters by mutableStateOf(SearchFilters(resolution = ResolutionFilter.ANY))
     var enabledProviders by mutableStateOf(prefs.loadEnabledProviders())
     var apiKeys by mutableStateOf(prefs.loadKeys())
-    var favorites by mutableStateOf(prefs.loadFavorites())
+    private var _favorites by mutableStateOf(prefs.loadFavorites())
+    val favorites: List<PhotoItem> get() = _favorites
+    val favourites: List<PhotoItem> get() = _favorites
     var searchHistory by mutableStateOf(prefs.loadHistory())
+    val history: List<String> get() = searchHistory
 
     var results by mutableStateOf<List<PhotoItem>>(emptyList())
     var providerStates by mutableStateOf<List<ProviderResult>>(emptyList())
     var currentPage by mutableIntStateOf(1)
     var canLoadMore by mutableStateOf(false)
+    val hasMore: Boolean get() = canLoadMore
     var isSearching by mutableStateOf(false)
     var isLoadingMore by mutableStateOf(false)
     var isOffline by mutableStateOf(false)
     var statusBanner by mutableStateOf<String?>(null)
     var selectedIds by mutableStateOf<Set<String>>(emptySet())
+    var activePhotoIndex by mutableStateOf<Int?>(null)
 
     private var searchJob: Job? = null
 
@@ -58,6 +64,10 @@ class HuntViewModel(app: Application) : AndroidViewModel(app) {
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
+    fun refreshConnectivity() {
+        isOffline = !hasNetwork()
+    }
+
     fun startSearch(customQuery: String? = null) {
         val q = (customQuery ?: query).trim()
         if (q.isEmpty()) {
@@ -73,6 +83,7 @@ class HuntViewModel(app: Application) : AndroidViewModel(app) {
         if (customQuery != null) query = q
         searchJob?.cancel()
         selectedIds = emptySet()
+        activePhotoIndex = null
         currentPage = 1
         canLoadMore = false
         isSearching = true
@@ -146,9 +157,15 @@ class HuntViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun runSearch(customQuery: String? = null, loadMore: Boolean = false) {
+        if (loadMore) loadMore() else startSearch(customQuery)
+    }
+
     fun toggleSelect(id: String) {
         selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
     }
+
+    fun toggleSelect(item: PhotoItem) = toggleSelect(item.id)
 
     fun toggleSelectAll() {
         selectedIds = if (selectedIds.size == results.size) emptySet() else results.map { it.id }.toSet()
@@ -158,13 +175,32 @@ class HuntViewModel(app: Application) : AndroidViewModel(app) {
         selectedIds = emptySet()
     }
 
-    fun toggleFavorite(item: PhotoItem) {
-        val exists = favorites.any { it.highResUrl == item.highResUrl }
-        favorites = if (exists) favorites.filterNot { it.highResUrl == item.highResUrl } else listOf(item) + favorites
-        prefs.saveFavorites(favorites)
+    fun clearQueryAndResults() {
+        query = ""
+        results = emptyList()
+        statusBanner = null
     }
 
-    fun isFavorite(item: PhotoItem): Boolean = favorites.any { it.highResUrl == item.highResUrl }
+    fun toggleFavorite(item: PhotoItem) {
+        val exists = _favorites.any { it.highResUrl == item.highResUrl }
+        _favorites = if (exists) _favorites.filterNot { it.highResUrl == item.highResUrl } else listOf(item) + _favorites
+        prefs.saveFavorites(_favorites)
+    }
+
+    fun toggleFavourite(item: PhotoItem) = toggleFavorite(item)
+
+    fun isFavorite(item: PhotoItem): Boolean = _favorites.any { it.highResUrl == item.highResUrl }
+
+    fun isFavourite(item: PhotoItem): Boolean = isFavorite(item)
+
+    fun enqueueBatch(items: List<PhotoItem>) {
+        if (items.isEmpty()) return
+        val ctx = getApplication<Application>()
+        viewModelScope.launch {
+            items.forEach { DownloadPipeline.enqueueHighRes(ctx, it) }
+        }
+        selectedIds = emptySet()
+    }
 
     fun toggleProvider(provider: SourceProvider, enabled: Boolean) {
         val next = if (enabled) enabledProviders + provider else enabledProviders - provider

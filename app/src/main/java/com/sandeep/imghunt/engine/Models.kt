@@ -13,7 +13,8 @@ enum class SourceProvider(val label: String, val requiresKey: Boolean = false) {
 
 enum class SortOrder(val label: String) {
     RELEVANCE("Relevance"),
-    RESOLUTION("Highest Res")
+    RESOLUTION("Highest Res"),
+    SOURCE("Source")
 }
 
 enum class AspectFilter(val label: String) {
@@ -49,6 +50,8 @@ data class SearchFilters(
     val license: LicenseFilter = LicenseFilter.ALL,
     val sort: SortOrder = SortOrder.RELEVANCE
 ) {
+    val sortBy: SortOrder get() = sort
+
     fun matches(photo: PhotoItem): Boolean {
         val hasDims = photo.width > 0 && photo.height > 0
         if (resolution != ResolutionFilter.ANY) {

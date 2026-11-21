@@ -72,7 +72,7 @@ class AppPrefs(context: Context) {
                             mimeType = o.optString("mimeType").takeIf { it.isNotBlank() },
                             isOpenLicense = o.optBoolean("isOpenLicense", true),
                             licenseLabel = o.optString("licenseLabel", "Open / Public"),
-                            attribution = o.optString("attribution", "")
+                            creator = o.optString("creator").takeIf { it.isNotBlank() }
                         )
                     )
                 }
@@ -96,7 +96,7 @@ class AppPrefs(context: Context) {
                     put("mimeType", p.mimeType ?: "")
                     put("isOpenLicense", p.isOpenLicense)
                     put("licenseLabel", p.licenseLabel)
-                    put("attribution", p.attribution)
+                    put("creator", p.creator ?: "")
                 }
             )
         }
