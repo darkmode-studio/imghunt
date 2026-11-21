@@ -38,7 +38,9 @@ class BrowserImportStorageTest {
         val image=PhotoItem("browser_"+UUID.randomUUID(),"Invalid fixture","",file.toURI().toString(),"https://fixture.example/",SourceProvider.BROWSER)
         val record=finished(BrowserImageDownloads.enqueue(context,image))
         assertEquals("failed",record.status);assertNull(record.savedUri)
-        assertNull(ImgHuntDb.get(context).dao().importedUrl(image.highResUrl));file.delete()
+        assertNull(ImgHuntDb.get(context).dao().importedUrl(image.highResUrl))
+        runCatching { file.delete() }
+        Unit
     }
     @Test fun cancelledImportIsNotReportedAsComplete()=runBlocking{
         val image=PhotoItem("browser_"+UUID.randomUUID(),"Cancelled fixture","","https://invalid.example/"+UUID.randomUUID()+".png","https://fixture.example/",SourceProvider.BROWSER)
