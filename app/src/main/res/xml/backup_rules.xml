@@ -1,6 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
     <exclude domain="database" path="imghunt.db" />
-    <exclude domain="database" path="imghunt.db-wal" />
-    <exclude domain="database" path="imghunt.db-shm" />
 </full-backup-content>
