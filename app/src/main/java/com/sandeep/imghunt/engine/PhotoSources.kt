@@ -3,305 +3,82 @@ package com.sandeep.imghunt.engine
 import android.content.Context
 import coil3.ImageLoader
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
-import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 object PhotoSources {
-
-    const val APP_UA = "ImgHunt/1.0 (Android; darkmode-studio/imghunt)"
-
+    const val APP_UA = "ImgHunt/1.1 (Android; darkmode-studio/imghunt)"
     fun createImageLoader(context: Context): ImageLoader {
-        val client = OkHttpClient.Builder()
-            .connectTimeout(12, TimeUnit.SECONDS)
-            .readTimeout(25, TimeUnit.SECONDS)
-            .followRedirects(true)
-            .addInterceptor { chain ->
-                val req = chain.request().newBuilder()
-                    .header("User-Agent", APP_UA)
-                    .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
-                    .build()
-                chain.proceed(req)
-            }
-            .build()
-        return ImageLoader.Builder(context.applicationContext)
-            .components {
-                add(OkHttpNetworkFetcherFactory(callFactory = { client }))
-            }
-            .build()
+        val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS).followRedirects(true)
+            .addInterceptor { chain -> chain.proceed(chain.request().newBuilder().header("User-Agent", APP_UA).build()) }.build()
+        return ImageLoader.Builder(context.applicationContext).components {
+            add(OkHttpNetworkFetcherFactory(callFactory = { client }))
+        }.build()
     }
+    private fun enc(value: String) = URLEncoder.encode(value.trim(), "UTF-8")
+    // Compatibility helper only. Real searches below always preserve the complete query.
+    fun queryVariants(query: String): List<String> = buildList {
+        add(query.trim())
+        query.trim().split(Regex("\\s+")).takeIf { it.size > 1 }?.firstOrNull()?.let { add(it) }
+    }.distinct()
 
-    private fun getJson(urlStr: String, headers: Map<String, String> = emptyMap(), timeoutMs: Int = 9000): String {
-        val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = timeoutMs
-            readTimeout = timeoutMs
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", APP_UA)
-            setRequestProperty("Accept", "application/json, */*;q=0.8")
-            headers.forEach { (k, v) -> setRequestProperty(k, v) }
+    suspend fun fetchPage(provider: SourceProvider, query: String, page: Int = 1, apiKey: String? = null): CatalogPage {
+        require(page >= 1)
+        require(provider != SourceProvider.BRAVE) { "Web search requires the secure gateway" }
+        require(!provider.requiresKey || !apiKey.isNullOrBlank()) { "API key required for ${provider.label}" }
+        val q = enc(query)
+        val headers = when (provider) {
+            SourceProvider.UNSPLASH -> mapOf("Authorization" to "Client-ID ${apiKey.orEmpty()}")
+            SourceProvider.PEXELS -> mapOf("Authorization" to apiKey.orEmpty())
+            else -> emptyMap()
         }
-        return try {
-            val code = conn.responseCode
-            if (code !in 200..299) error("HTTP $code")
-            conn.inputStream.bufferedReader().use { it.readText() }
-        } finally {
-            conn.disconnect()
+        val url = when (provider) {
+            SourceProvider.OPENVERSE -> "https://api.openverse.org/v1/images/?q=$q&page=$page&page_size=36"
+            SourceProvider.WIKIMEDIA -> "https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search&gsrnamespace=6&gsrlimit=36&gsroffset=${(page-1)*36}&gsrsearch=$q&prop=imageinfo&iiprop=url|size|mime|extmetadata&iiurlwidth=640"
+            SourceProvider.ARCHIVE -> "https://archive.org/advancedsearch.php?q=${enc("mediatype:image AND ($query)")}&fl[]=identifier,title,creator&rows=36&page=$page&output=json"
+            SourceProvider.NASA -> "https://images-api.nasa.gov/search?q=$q&media_type=image&page=$page&page_size=36"
+            SourceProvider.MET -> "https://collectionapi.metmuseum.org/public/collection/v1/search?hasImages=true&q=$q"
+            SourceProvider.UNSPLASH -> "https://api.unsplash.com/search/photos?query=$q&page=$page&per_page=30"
+            SourceProvider.PEXELS -> "https://api.pexels.com/v1/search?query=$q&page=$page&per_page=30"
+            SourceProvider.PIXABAY -> "https://pixabay.com/api/?key=${enc(apiKey.orEmpty())}&q=$q&image_type=photo&page=$page&per_page=30&safesearch=true"
+            SourceProvider.BRAVE -> error("Use the gateway")
         }
-    }
-
-    private fun enc(q: String): String = URLEncoder.encode(q.trim(), "UTF-8")
-
-    fun queryVariants(query: String): List<String> {
-        val trimmed = query.trim()
-        val parts = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
-        val out = LinkedHashSet<String>()
-        out += trimmed
-        if (parts.size >= 2) out += parts.first()
-        return out.toList()
-    }
-
-    private fun endpoint(provider: SourceProvider, q: String, rawQuery: String, page: Int, key: String?): Pair<String, Map<String, String>> =
-        when (provider) {
-            SourceProvider.OPENVERSE ->
-                "https://api.openverse.org/v1/images/?q=$q&page=$page&page_size=36" to emptyMap()
-            SourceProvider.WIKIMEDIA -> {
-                val offset = (page - 1) * 36
-                "https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit=36&gsroffset=$offset&gsrsearch=$q&prop=imageinfo&iiprop=url|size|mime|extmetadata&iiurlwidth=640" to emptyMap()
-            }
-            SourceProvider.ARCHIVE ->
-                "https://archive.org/advancedsearch.php?q=${enc("mediatype:image AND ($rawQuery)")}&fl[]=identifier,title,creator&rows=36&page=$page&output=json" to emptyMap()
-            SourceProvider.NASA ->
-                "https://images-api.nasa.gov/search?q=$q&media_type=image&page=$page&page_size=36" to emptyMap()
-            SourceProvider.MET ->
-                "https://collectionapi.metmuseum.org/public/collection/v1/search?hasImages=true&q=$q" to emptyMap()
-            SourceProvider.UNSPLASH ->
-                "https://api.unsplash.com/search/photos?query=$q&page=$page&per_page=30" to mapOf("Authorization" to "Client-ID ${key.orEmpty()}")
-            SourceProvider.PEXELS ->
-                "https://api.pexels.com/v1/search?query=$q&page=$page&per_page=30" to mapOf("Authorization" to key.orEmpty())
-            SourceProvider.PIXABAY ->
-                "https://pixabay.com/api/?key=${enc(key.orEmpty())}&q=$q&image_type=photo&page=$page&per_page=30" to emptyMap()
-        }
-
-    fun fetchProvider(provider: SourceProvider, query: String, page: Int = 1, apiKey: String? = null): List<PhotoItem> {
-        if (provider.requiresKey && apiKey.isNullOrBlank()) error("API key required for ${provider.label}")
-        val (url, headers) = endpoint(provider, enc(query), query, page, apiKey)
-        val raw = getJson(url, headers)
+        val root = JSONObject(SearchHttp.get(url, headers))
+        if (root.has("error")) throw java.io.IOException("${provider.label} returned an API error")
         return when (provider) {
-            SourceProvider.OPENVERSE -> {
-                val arr = JSONObject(raw).optJSONArray("results") ?: JSONArray()
-                buildList {
-                    for (i in 0 until arr.length()) {
-                        val o = arr.optJSONObject(i) ?: continue
-                        val full = o.optString("url").takeIf { it.startsWith("http") } ?: continue
-                        val thumb = o.optString("thumbnail").takeIf { it.startsWith("http") } ?: full
-                        val creator = o.optString("creator").trim()
-                        val lic = o.optString("license").uppercase().ifBlank { "CC" }
-                        val attr = buildString {
-                            if (creator.isNotBlank()) append("By $creator")
-                            if (lic.isNotBlank()) append(if (isNotEmpty()) " · $lic" else lic)
-                        }
-                        add(PhotoItem("ov_${o.optString("id", "$page-$i")}", o.optString("title").ifBlank { "Openverse Image" }, thumb, full, o.optString("foreign_landing_url"), provider, o.optInt("width", 0), o.optInt("height", 0), null, true, lic, attr))
-                    }
-                }
-            }
-            SourceProvider.WIKIMEDIA -> {
-                val pages = JSONObject(raw).optJSONObject("query")?.optJSONObject("pages") ?: JSONObject()
-                buildList {
-                    val keys = pages.keys()
-                    while (keys.hasNext()) {
-                        val k = keys.next()
-                        val p = pages.optJSONObject(k) ?: continue
-                        val info = p.optJSONArray("imageinfo")?.optJSONObject(0) ?: continue
-                        val full = info.optString("url").takeIf { it.startsWith("http") } ?: continue
-                        val thumb = info.optString("thumburl").takeIf { it.startsWith("http") } ?: full
-                        val mime = info.optString("mime").ifBlank { null }
-                        if (mime == "image/svg+xml") continue
-                        val artist = info.optJSONObject("extmetadata")?.optJSONObject("Artist")?.optString("value").orEmpty().replace(Regex("<[^>]*>"), "").trim()
-                        val licShort = info.optJSONObject("extmetadata")?.optJSONObject("LicenseShortName")?.optString("value").orEmpty().trim()
-                        val attr = listOfNotNull(artist.takeIf { it.isNotBlank() }?.let { "By $it" }, licShort.takeIf { it.isNotBlank() }).joinToString(" · ").ifBlank { "Wikimedia Commons" }
-                        add(PhotoItem("wm_${page}_$k", p.optString("title").removePrefix("File:").ifBlank { "Wikimedia Image" }, thumb, full, info.optString("descriptionurl"), provider, info.optInt("width", 0), info.optInt("height", 0), mime, true, licShort.ifBlank { "Wikimedia" }, attr))
-                    }
-                }
-            }
-            SourceProvider.ARCHIVE -> {
-                val docs = JSONObject(raw).optJSONObject("response")?.optJSONArray("docs") ?: JSONArray()
-                buildList {
-                    for (i in 0 until docs.length()) {
-                        val d = docs.optJSONObject(i) ?: continue
-                        val id = d.optString("identifier").takeIf { it.isNotBlank() } ?: continue
-                        val creator = d.optString("creator").trim()
-                        val img = "https://archive.org/services/img/$id"
-                        val attr = if (creator.isNotBlank()) "By $creator · Archive" else "Internet Archive"
-                        add(PhotoItem("ia_${page}_$id", d.optString("title").ifBlank { id }, img, img, "https://archive.org/details/$id", provider, 0, 0, null, true, "Archive", attr))
-                    }
-                }
-            }
-            SourceProvider.NASA -> {
-                val items = JSONObject(raw).optJSONObject("collection")?.optJSONArray("items") ?: JSONArray()
-                buildList {
-                    for (i in 0 until items.length()) {
-                        val it = items.optJSONObject(i) ?: continue
-                        val data = it.optJSONArray("data")?.optJSONObject(0) ?: continue
-                        val href = it.optJSONArray("links")?.optJSONObject(0)?.optString("href")?.takeIf { u -> u.startsWith("http") } ?: continue
-                        val nid = data.optString("nasa_id").ifBlank { "$i" }
-                        val center = data.optString("center").trim()
-                        val attr = if (center.isNotBlank()) "NASA ($center)" else "NASA Public Domain"
-                        add(PhotoItem("nasa_${page}_$nid", data.optString("title").ifBlank { nid }, href, href, "https://images.nasa.gov/details/$nid", provider, 0, 0, null, true, "NASA Public", attr))
-                    }
-                }
-            }
-            SourceProvider.MET -> {
-                val ids = JSONObject(raw).optJSONArray("objectIDs") ?: JSONArray()
-                val start = ((page - 1) * 6).coerceAtLeast(0)
-                val end = minOf(ids.length(), start + 6)
-                buildList {
-                    for (i in start until end) {
-                        val id = ids.optInt(i, -1)
-                        if (id <= 0) continue
-                        val objRaw = runCatching { getJson("https://collectionapi.metmuseum.org/public/collection/v1/objects/$id", timeoutMs = 2500) }.getOrNull() ?: continue
-                        val obj = JSONObject(objRaw)
-                        val full = obj.optString("primaryImage").takeIf { it.startsWith("http") } ?: continue
-                        val thumb = obj.optString("primaryImageSmall").takeIf { it.startsWith("http") } ?: full
-                        val open = obj.optBoolean("isPublicDomain", false)
-                        val artist = obj.optString("artistDisplayName").trim()
-                        val attr = listOfNotNull(artist.takeIf { it.isNotBlank() }?.let { "By $it" }, if (open) "Met Open Access" else "Met Collection").joinToString(" · ")
-                        add(PhotoItem("met_$id", obj.optString("title").ifBlank { "Met #$id" }, thumb, full, obj.optString("objectURL"), provider, 0, 0, null, open, if (open) "Met Open" else "Met", attr))
-                    }
-                }
-            }
-            SourceProvider.UNSPLASH -> {
-                val arr = JSONObject(raw).optJSONArray("results") ?: JSONArray()
-                buildList {
-                    for (i in 0 until arr.length()) {
-                        val o = arr.optJSONObject(i) ?: continue
-                        val urls = o.optJSONObject("urls") ?: continue
-                        val full = (urls.optString("raw").takeIf { it.isNotBlank() } ?: urls.optString("full")).takeIf { it.startsWith("http") } ?: continue
-                        val thumb = urls.optString("small").takeIf { it.startsWith("http") } ?: full
-                        val user = o.optJSONObject("user")?.optString("name").orEmpty().trim()
-                        val attr = if (user.isNotBlank()) "By $user · Unsplash" else "Unsplash License"
-                        add(PhotoItem("us_${o.optString("id", "$page-$i")}", o.optString("alt_description").ifBlank { "Unsplash Photo" }, thumb, full, o.optJSONObject("links")?.optString("html").orEmpty(), provider, o.optInt("width", 0), o.optInt("height", 0), null, true, "Unsplash", attr))
-                    }
-                }
-            }
-            SourceProvider.PEXELS -> {
-                val arr = JSONObject(raw).optJSONArray("photos") ?: JSONArray()
-                buildList {
-                    for (i in 0 until arr.length()) {
-                        val o = arr.optJSONObject(i) ?: continue
-                        val src = o.optJSONObject("src") ?: continue
-                        val full = (src.optString("original").takeIf { it.isNotBlank() } ?: src.optString("large2x")).takeIf { it.startsWith("http") } ?: continue
-                        val thumb = src.optString("medium").takeIf { it.startsWith("http") } ?: full
-                        val photog = o.optString("photographer").trim()
-                        val attr = if (photog.isNotBlank()) "By $photog · Pexels" else "Pexels License"
-                        add(PhotoItem("px_${o.optInt("id", i)}", o.optString("alt").ifBlank { "Pexels Photo" }, thumb, full, o.optString("url"), provider, o.optInt("width", 0), o.optInt("height", 0), null, true, "Pexels", attr))
-                    }
-                }
-            }
-            SourceProvider.PIXABAY -> {
-                val arr = JSONObject(raw).optJSONArray("hits") ?: JSONArray()
-                buildList {
-                    for (i in 0 until arr.length()) {
-                        val o = arr.optJSONObject(i) ?: continue
-                        val full = (o.optString("largeImageURL").takeIf { it.isNotBlank() } ?: o.optString("webformatURL")).takeIf { it.startsWith("http") } ?: continue
-                        val thumb = o.optString("previewURL").takeIf { it.startsWith("http") } ?: full
-                        val user = o.optString("user").trim()
-                        val attr = if (user.isNotBlank()) "By $user · Pixabay" else "Pixabay License"
-                        add(PhotoItem("pb_${o.optInt("id", i)}", o.optString("tags").ifBlank { "Pixabay Photo" }, thumb, full, o.optString("pageURL"), provider, o.optInt("imageWidth", 0), o.optInt("imageHeight", 0), null, true, "Pixabay", attr))
-                    }
-                }
-            }
+            SourceProvider.MET -> MetCatalog.parse(root, page)
+            SourceProvider.UNSPLASH, SourceProvider.PEXELS, SourceProvider.PIXABAY -> StockCatalog.parse(provider, root, page)
+            else -> OpenCatalog.parse(provider, root, page)
         }
     }
+    suspend fun fetchProvider(provider: SourceProvider, query: String, page: Int = 1, apiKey: String? = null): List<PhotoItem> =
+        fetchPage(provider, query, page, apiKey).items
 
     fun rankAndSort(items: List<PhotoItem>, sortBy: SortOrder): List<PhotoItem> = when (sortBy) {
-        SortOrder.RELEVANCE -> items.sortedByDescending { item ->
-            var score = 0
-            if (item.width >= 1280 && item.height >= 720) score += 20
-            if (item.width > 0 && item.height > 0) score += 10
-            if (item.provider in setOf(SourceProvider.UNSPLASH, SourceProvider.PEXELS, SourceProvider.PIXABAY, SourceProvider.OPENVERSE)) score += 5
-            score
-        }
-        SortOrder.RESOLUTION -> items.sortedByDescending { it.width.toLong() * it.height.toLong() }
-        SortOrder.SOURCE -> items.sortedBy { it.provider.label }
+        SortOrder.RELEVANCE -> items
+        SortOrder.RESOLUTION -> items.sortedByDescending { it.width.toLong() * it.height }
+        SortOrder.SOURCE -> items.sortedBy { it.sourceLabel }
     }
-
-    suspend fun searchPage(
-        query: String,
-        page: Int,
-        filters: SearchFilters,
-        enabledProviders: Set<SourceProvider>,
-        apiKeys: Map<SourceProvider, String>,
-        allowFallback: Boolean = true
-    ): Pair<List<PhotoItem>, List<ProviderResult>> = coroutineScope {
-        val active = enabledProviders.filter { !it.requiresKey || !apiKeys[it].isNullOrBlank() }
-        val primaryList = if (active.isNotEmpty()) active else listOf(SourceProvider.OPENVERSE, SourceProvider.WIKIMEDIA)
-        val queries = if (page == 1) queryVariants(query) else listOf(query.trim())
-
-        val statuses = primaryList.map { p ->
-            async(Dispatchers.IO) {
-                val mergedItems = LinkedHashMap<String, PhotoItem>()
-                var lastErr: String? = null
-                for (qv in queries) {
-                    val r = withTimeoutOrNull(8500L) { runCatching { fetchProvider(p, qv, page, apiKeys[p]) } }
-                    when {
-                        r == null -> lastErr = "Timed out"
-                        r.isFailure -> lastErr = r.exceptionOrNull()?.message ?: "Error"
-                        else -> r.getOrDefault(emptyList()).forEach { mergedItems.putIfAbsent(it.id, it) }
-                    }
-                    if (mergedItems.size >= 24) break
-                }
-                if (mergedItems.isNotEmpty()) ProviderResult(p, mergedItems.values.toList(), null)
-                else ProviderResult(p, emptyList(), lastErr)
-            }
-        }.awaitAll().toMutableList()
-
-        val deduped = LinkedHashMap<String, PhotoItem>()
-        for (st in statuses) {
-            for (item in st.items) {
-                if (filters.matches(item)) deduped.putIfAbsent(item.highResUrl, item)
-            }
+    suspend fun searchPage(query: String, page: Int, filters: SearchFilters,
+        enabledProviders: Set<SourceProvider>, apiKeys: Map<SourceProvider, String>,
+        allowFallback: Boolean = true): Pair<List<PhotoItem>, List<ProviderResult>> = coroutineScope {
+        val providers = enabledProviders.filter { it != SourceProvider.BRAVE }.ifEmpty {
+            listOf(SourceProvider.OPENVERSE, SourceProvider.WIKIMEDIA)
         }
-
-        if (allowFallback && deduped.size < 16) {
-            val fallbacks = SourceProvider.entries.filter { it !in primaryList && (!it.requiresKey || !apiKeys[it].isNullOrBlank()) }
-            if (fallbacks.isNotEmpty()) {
-                val fbList = fallbacks.map { fb ->
-                    async(Dispatchers.IO) {
-                        val mergedFb = LinkedHashMap<String, PhotoItem>()
-                        var fbErr: String? = null
-                        for (qv in queries) {
-                            val r = withTimeoutOrNull(8500L) { runCatching { fetchProvider(fb, qv, page, apiKeys[fb]) } }
-                            when {
-                                r == null -> fbErr = "Timed out"
-                                r.isFailure -> fbErr = r.exceptionOrNull()?.message ?: "Error"
-                                else -> r.getOrDefault(emptyList()).forEach { mergedFb.putIfAbsent(it.id, it) }
-                            }
-                            if (mergedFb.size >= 16) break
-                        }
-                        ProviderResult(fb, mergedFb.values.toList(), if (mergedFb.isEmpty()) fbErr else null, usedFallback = true)
-                    }
-                }.awaitAll()
-                for (fr in fbList) {
-                    statuses += fr
-                    for (item in fr.items) {
-                        if (filters.matches(item)) deduped.putIfAbsent(item.highResUrl, item)
-                    }
-                }
+        val states = providers.map { provider -> async {
+            try {
+                val result = withTimeout(20000) { fetchPage(provider, query.trim(), page, apiKeys[provider]) }
+                ProviderResult(provider, result.items, hasMore = result.hasMore)
+            } catch (cancel: CancellationException) { throw cancel
+            } catch (error: Exception) {
+                ProviderResult(provider, emptyList(), error.message ?: "Source unavailable", hasMore = true)
             }
-        }
-
-        val sorted = withContext(Dispatchers.Default) { rankAndSort(deduped.values.toList(), filters.sortBy) }
-        sorted to statuses
+        } }.awaitAll()
+        // Do not query disabled sources, silently alter names, or relax explicit filters.
+        rankAndSort(states.flatMap { it.items }.filter(filters::matches).distinctBy { it.highResUrl }, filters.sort) to states
     }
 }
