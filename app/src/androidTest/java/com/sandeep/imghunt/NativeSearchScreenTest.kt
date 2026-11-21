@@ -20,26 +20,24 @@ class NativeSearchScreenTest {
             val context = LocalContext.current
             val loader = remember { PhotoSources.createImageLoader(context) }
             DisposableEffect(loader) { onDispose { loader.shutdown() } }
-            MaterialTheme {
-                NativeSearchScreen(NativeSearchState(query = "mountains"), loader, rememberLazyGridState(),
-                    onQuery = {}, onSearch = onSearch, onCancel = {}, onMode = {}, onSettings = onSettings,
-                    onMore = {}, onOpen = {}, onFavorite = {}, onDownload = {})
-            }
+            MaterialTheme { NativeSearchScreen(NativeSearchState(query = "mountains"), loader, rememberLazyGridState(),
+                {}, onSearch, {}, {}, onSettings, {}, {}, {}, {}) }
         }
     }
-    @Test fun missingGatewayHasAnActionableSetupState() {
+    @Test fun freeScreenDoesNotRequireGatewayCredentials() {
         var opened = false
         render(onSettings = { opened = true })
-        rule.onNodeWithText("Connect broader web search").assertIsDisplayed()
-        rule.onNodeWithText("Open Search settings").performClick()
+        rule.onNodeWithText("Free catalog search").assertIsDisplayed()
+        rule.onNodeWithText("HTTPS gateway URL").assertDoesNotExist()
+        rule.onNodeWithText("App access token").assertDoesNotExist()
+        rule.onNodeWithText("Free sources").performClick()
         rule.runOnIdle { assertTrue(opened) }
-        rule.onNodeWithText("No images matched. Try another term or relax your filters.").assertDoesNotExist()
     }
-    @Test fun providerSearchIsAnExplicitUserAction() {
-        var searches = 0
-        render(onSearch = { searches++ })
-        rule.runOnIdle { assertEquals(0, searches) }
+    @Test fun searchRequiresAnExplicitUserAction() {
+        var count = 0
+        render(onSearch = { count++ })
+        rule.runOnIdle { assertEquals(0, count) }
         rule.onNodeWithContentDescription("Search images").performClick()
-        rule.runOnIdle { assertEquals(1, searches) }
+        rule.runOnIdle { assertEquals(1, count) }
     }
 }
