@@ -19,7 +19,7 @@ enum class AspectFilter(val label: String) {
 }
 
 enum class ResolutionFilter(val label: String, val minWidth: Int, val minHeight: Int) {
-    ANY("Any HD+", 0, 0),
+    ANY("Any", 0, 0),
     HD("HD (1280+)", 1280, 720),
     FHD("Full HD (1920+)", 1920, 1080),
     UHD("4K (3840+)", 3840, 2160)
@@ -46,10 +46,7 @@ data class SearchFilters(
     fun matches(photo: PhotoItem): Boolean {
         if (resolution != ResolutionFilter.ANY && photo.width > 0 && photo.height > 0) {
             val maxSide = maxOf(photo.width, photo.height)
-            val minSide = minOf(photo.width, photo.height)
-            if (maxSide < resolution.minWidth || minSide < minOf(resolution.minHeight, resolution.minWidth)) {
-                return false
-            }
+            if (maxSide < resolution.minWidth) return false
         }
         if (aspect != AspectFilter.ANY && photo.width > 0 && photo.height > 0) {
             when (aspect) {
@@ -67,9 +64,7 @@ data class SearchFilters(
             val expected = if (format == FormatFilter.JPG) setOf("JPG", "JPEG") else setOf(format.name)
             if (ext !in expected) return false
         }
-        if (license == LicenseFilter.OPEN && !photo.isOpenLicense) {
-            return false
-        }
+        if (license == LicenseFilter.OPEN && !photo.isOpenLicense) return false
         return true
     }
 }
