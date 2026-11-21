@@ -1,9 +1,21 @@
-# imghunt
+# ImgHunt native Android beta
 
-Standalone Android image search and direct high-resolution downloader built with Kotlin, Jetpack Compose, Room, WorkManager, and Coil 3.
+Kotlin and Jetpack Compose image search with native navigation, a full-screen viewer, saved images and background downloads. This branch is a first development milestone, not a production-ready release.
 
-## Features
-- **API-First Search & Automatic Fallback:** Queries Openverse, Wikimedia Commons, Internet Archive, NASA Images, and Met Museum out of the box (plus optional API keys for Unsplash, Pexels, and Pixabay), automatically trying fallback providers and query variants when results are thin.
-- **Accurate Resolution, Aspect & Format Filters:** Checks both long and short sides against resolution thresholds (such as 4K), handles missing dimensions cleanly, and detects real image formats from MIME types and file magic bytes.
-- **Pagination, Sorting, Favourites & History:** Load more pages (`Load more`), sort by relevance or resolution, keep search suggestions/history, save favourites, and persist UI state across screen rotations via `HuntViewModel`.
-- **Smooth HQ Downloads & Viewer:** Non-blocking batch queuing, live `bytesDone` progress bars, retry/cancel/open saved file actions, pinch/double-tap zoom, share, and Set as Wallpaper in the viewer.
+## Broader web images
+
+Configure and host the service in backend/ separately. Enter its HTTPS URL and separate app access token in Android Search settings. The Brave provider key stays on the server. No backend or subscription is activated by this repository.
+
+Brave returns up to 200 images per query, not unlimited paginated results. Android reveals that batch progressively without a new provider call per scroll. Original-image URLs, source-page links and unknown reuse rights remain distinct. SafeSearch is strict. Missing configuration is shown as setup, not as no search results.
+
+Open catalogs mode is still available without a gateway, using the selected catalog sources. Optional stock services require your own source key. Source-specific continuation and visible error states replace silent fallback.
+
+## Beta APK
+
+The package is com.sandeep.imghunt.beta and the launcher label is ImgHunt Beta. It installs beside the old app; old app data is not migrated. The release variant uses a configured keystore or the existing development-key fallback, not a store-ready production signing setup.
+
+## Verification
+
+CI runs mocked gateway tests, Android unit tests, lint, device-test compilation, and APK builds. Tests under app/src/androidTest must still be RUN on an emulator or phone using ./gradlew connectedDebugAndroidTest. Compiling them is not a device pass. Live provider access needs actual hosting and credentials.
+
+Before public release: live phone/provider tests, accessibility and performance checks, production signing, per-user gateway authentication and quotas, privacy documentation, and security review.
