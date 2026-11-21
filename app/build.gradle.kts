@@ -4,7 +4,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
-
 android {
     namespace = "com.sandeep.imghunt"
     compileSdk = 35
@@ -12,8 +11,8 @@ android {
         applicationId = "com.sandeep.imghunt"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0-beta1"
+        versionCode = 3
+        versionName = "1.2.0-browser-beta1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -26,31 +25,24 @@ android {
                 keyPassword = System.getenv("IMGHUNT_KEY_PASSWORD")
             } else {
                 val debug = signingConfigs.getByName("debug")
-                storeFile = debug.storeFile
-                storePassword = debug.storePassword
-                keyAlias = debug.keyAlias
-                keyPassword = debug.keyPassword
+                storeFile = debug.storeFile; storePassword = debug.storePassword
+                keyAlias = debug.keyAlias; keyPassword = debug.keyPassword
             }
         }
     }
     buildTypes {
-        debug { applicationIdSuffix = ".beta" }
+        debug { applicationIdSuffix = ".browserbeta" }
         release {
-            applicationIdSuffix = ".beta"
+            applicationIdSuffix = ".browserbeta"
             signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = true; isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
 }
-
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.05.00")
     implementation(composeBom)
