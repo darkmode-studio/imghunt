@@ -18,8 +18,27 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            val storeFilePath = System.getenv("IMGHUNT_KEYSTORE_PATH")
+            if (!storeFilePath.isNullOrBlank()) {
+                storeFile = file(storeFilePath)
+                storePassword = System.getenv("IMGHUNT_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("IMGHUNT_KEY_ALIAS")
+                keyPassword = System.getenv("IMGHUNT_KEY_PASSWORD")
+            } else {
+                val debugCfg = signingConfigs.getByName("debug")
+                storeFile = debugCfg.storeFile
+                storePassword = debugCfg.storePassword
+                keyAlias = debugCfg.keyAlias
+                keyPassword = debugCfg.keyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
