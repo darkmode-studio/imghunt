@@ -8,8 +8,11 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,7 +41,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Download
@@ -48,7 +53,9 @@ import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.ImageSearch
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -89,7 +96,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil3.ImageLoader
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import com.sandeep.imghunt.data.AppPrefs
 import com.sandeep.imghunt.data.DownloadPipeline
 import com.sandeep.imghunt.data.DownloadRecord
@@ -110,12 +119,13 @@ private enum class HuntTab(val label: String) {
     DOWNLOADS("Saved")
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ImgHuntApp() {
     val context = LocalContext.current
     val keyboard = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
+    val imageLoader = remember { PhotoSources.createImageLoader(context) }
 
     val prefs = remember { AppPrefs(context) }
     val db = remember { ImgHuntDb.get(context) }
@@ -123,7 +133,7 @@ fun ImgHuntApp() {
 
     var tab by remember { mutableStateOf(HuntTab.SEARCH) }
     var query by remember { mutableStateOf("") }
-    var filters by remember { mutableStateOf(SearchFilters()) }
+    var filters by remember { mutableStateOf(SearchFilters(resolution = ResolutionFilter.ANY)) }
     var enabledProviders by remember { mutableStateOf(prefs.loadEnabledProviders()) }
     var apiKeys by remember { mutableStateOf(prefs.loadKeys()) }
 
@@ -132,9 +142,16 @@ fun ImgHuntApp() {
     var isSearching by remember { mutableStateOf(false) }
     var statusBanner by remember { mutableStateOf<String?>(null) }
 
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var activePhotoIndex by remember { mutableStateOf<Int?>(null) }
     var showFilterSheet by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
+
+    val selectionMode = selectedIds.isNotEmpty()
+
+    fun toggleSelect(item: PhotoItem) {
+        selectedIds = if (item.id in selectedIds) selectedIds - item.id else selectedIds + item.id
+    }
 
     fun runSearch(customQuery: String? = null) {
         val q = (customQuery ?: query).trim()
@@ -143,6 +160,7 @@ fun ImgHuntApp() {
             return
         }
         if (customQuery != null) query = q
+        selectedIds = emptySet()
         keyboard?.hide()
         isSearching = true
         statusBanner = null
@@ -160,6 +178,14 @@ fun ImgHuntApp() {
         }
     }
 
+    fun downloadSelected() {
+        val chosen = results.filter { it.id in selectedIds }
+        if (chosen.isEmpty()) return
+        chosen.forEach { DownloadPipeline.enqueueHighRes(context, it) }
+        Toast.makeText(context, "Queued ${chosen.size} HQ downloads", Toast.LENGTH_SHORT).show()
+        selectedIds = emptySet()
+    }
+
     val selectedPhoto = activePhotoIndex?.let { idx -> results.getOrNull(idx) }
     if (selectedPhoto != null && activePhotoIndex != null) {
         BackHandler { activePhotoIndex = null }
@@ -167,6 +193,7 @@ fun ImgHuntApp() {
             photo = selectedPhoto,
             index = activePhotoIndex!!,
             total = results.size,
+            imageLoader = imageLoader,
             onBack = { activePhotoIndex = null },
             onPrev = { if (activePhotoIndex!! > 0) activePhotoIndex = activePhotoIndex!! - 1 },
             onNext = { if (activePhotoIndex!! < results.size - 1) activePhotoIndex = activePhotoIndex!! + 1 },
@@ -176,6 +203,10 @@ fun ImgHuntApp() {
             }
         )
         return
+    }
+
+    BackHandler(enabled = selectionMode) {
+        selectedIds = emptySet()
     }
 
     Scaffold(
@@ -188,50 +219,81 @@ fun ImgHuntApp() {
                         .statusBarsPadding()
                         .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(ImgColors.AccentViolet.copy(alpha = 0.18f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.ImageSearch,
-                                contentDescription = "imghunt",
-                                tint = ImgColors.AccentSoft,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
+                    if (selectionMode) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            IconButton(onClick = { selectedIds = emptySet() }) {
+                                Icon(Icons.Outlined.Close, contentDescription = "Cancel selection", tint = ImgColors.TextPrimary)
+                            }
                             Text(
-                                text = "imghunt",
-                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                                color = ImgColors.TextPrimary
+                                text = "${selectedIds.size} selected",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = ImgColors.TextPrimary,
+                                modifier = Modifier.weight(1f)
                             )
-                            Text(
-                                text = "Direct HQ API image search",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = ImgColors.TextMuted
-                            )
+                            TextButton(
+                                onClick = {
+                                    selectedIds = if (selectedIds.size == results.size) emptySet() else results.map { it.id }.toSet()
+                                }
+                            ) {
+                                Icon(Icons.Outlined.SelectAll, contentDescription = null, tint = ImgColors.AccentSoft, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(if (selectedIds.size == results.size) "None" else "All", color = ImgColors.AccentSoft)
+                            }
+                            Button(
+                                onClick = { downloadSelected() },
+                                colors = ButtonDefaults.buttonColors(containerColor = ImgColors.AccentViolet, contentColor = ImgColors.OnAccent)
+                            ) {
+                                Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("HQ (${selectedIds.size})")
+                            }
                         }
-                        IconButton(onClick = { showFilterSheet = true }) {
-                            Icon(Icons.Outlined.FilterList, contentDescription = "Filters", tint = ImgColors.TextPrimary)
-                        }
-                        IconButton(onClick = { showSettingsSheet = true }) {
-                            Icon(Icons.Outlined.Settings, contentDescription = "Sources & Keys", tint = ImgColors.TextPrimary)
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(ImgColors.AccentViolet.copy(alpha = 0.18f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ImageSearch,
+                                    contentDescription = "imghunt",
+                                    tint = ImgColors.AccentSoft,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = "imghunt",
+                                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = ImgColors.TextPrimary
+                                )
+                                Text(
+                                    text = "Direct HQ API image search",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = ImgColors.TextMuted
+                                )
+                            }
+                            IconButton(onClick = { showFilterSheet = true }) {
+                                Icon(Icons.Outlined.FilterList, contentDescription = "Filters", tint = ImgColors.TextPrimary)
+                            }
+                            IconButton(onClick = { showSettingsSheet = true }) {
+                                Icon(Icons.Outlined.Settings, contentDescription = "Sources & Keys", tint = ImgColors.TextPrimary)
+                            }
                         }
                     }
 
-                    if (tab == HuntTab.SEARCH) {
+                    if (tab == HuntTab.SEARCH && !selectionMode) {
                         Spacer(Modifier.height(10.dp))
                         OutlinedTextField(
                             value = query,
                             onValueChange = { query = it },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            placeholder = { Text("Search photos, architecture, nature…", color = ImgColors.TextMuted) },
+                            placeholder = { Text("Search photos, people, nature…", color = ImgColors.TextMuted) },
                             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = ImgColors.TextMuted) },
                             trailingIcon = {
                                 if (query.isNotBlank()) {
@@ -357,9 +419,7 @@ fun ImgHuntApp() {
             when (tab) {
                 HuntTab.SEARCH -> {
                     if (results.isEmpty() && !isSearching) {
-                        EmptyHuntState(
-                            onPickPreset = { preset -> runSearch(preset) }
-                        )
+                        EmptyHuntState(onPickPreset = { preset -> runSearch(preset) })
                     } else {
                         LazyVerticalGrid(
                             columns = GridCells.Adaptive(minSize = 165.dp),
@@ -369,9 +429,16 @@ fun ImgHuntApp() {
                             modifier = Modifier.fillMaxSize()
                         ) {
                             itemsIndexed(results, key = { _, item -> item.id }) { idx, item ->
+                                val isSelected = item.id in selectedIds
                                 PhotoGridCard(
                                     item = item,
-                                    onOpen = { activePhotoIndex = idx },
+                                    selected = isSelected,
+                                    selectionMode = selectionMode,
+                                    imageLoader = imageLoader,
+                                    onOpen = {
+                                        if (selectionMode) toggleSelect(item) else activePhotoIndex = idx
+                                    },
+                                    onToggleSelect = { toggleSelect(item) },
                                     onQuickHq = {
                                         DownloadPipeline.enqueueHighRes(context, item)
                                         Toast.makeText(context, "Downloading HQ: ${item.title}", Toast.LENGTH_SHORT).show()
@@ -479,22 +546,44 @@ private fun EmptyHuntState(onPickPreset: (String) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PhotoGridCard(
     item: PhotoItem,
+    selected: Boolean,
+    selectionMode: Boolean,
+    imageLoader: ImageLoader,
     onOpen: () -> Unit,
+    onToggleSelect: () -> Unit,
     onQuickHq: () -> Unit
 ) {
+    val context = LocalContext.current
+    val thumbUrl = item.previewUrl.ifBlank { item.highResUrl }
+    val request = remember(thumbUrl) {
+        ImageRequest.Builder(context)
+            .data(thumbUrl)
+            .size(640)
+            .build()
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(0.82f)
             .clip(RoundedCornerShape(16.dp))
-            .background(ImgColors.SurfaceCard)
-            .clickable { onOpen() }
+            .background(ImgColors.SurfaceElevated)
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = if (selected) ImgColors.AccentViolet else ImgColors.BorderSubtle,
+                shape = RoundedCornerShape(16.dp)
+            )
+            .combinedClickable(
+                onClick = { onOpen() },
+                onLongClick = { onToggleSelect() }
+            )
     ) {
         AsyncImage(
-            model = item.previewUrl,
+            model = request,
+            imageLoader = imageLoader,
             contentDescription = item.title,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
@@ -504,11 +593,28 @@ private fun PhotoGridCard(
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f)),
-                        startY = 140f
+                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.80f)),
+                        startY = 120f
                     )
                 )
         )
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(8.dp)
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(if (selected) ImgColors.AccentViolet else Color.Black.copy(alpha = 0.55f))
+                .clickable { onToggleSelect() },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (selected) Icons.Outlined.Check else Icons.Outlined.RadioButtonUnchecked,
+                contentDescription = "Select image",
+                tint = Color.White,
+                modifier = Modifier.size(16.dp)
+            )
+        }
         Row(
             modifier = Modifier
                 .align(Alignment.BottomStart)
@@ -536,20 +642,23 @@ private fun PhotoGridCard(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(ImgColors.AccentViolet)
-                    .clickable { onQuickHq() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.HighQuality,
-                    contentDescription = "Download HQ",
-                    tint = ImgColors.OnAccent,
-                    modifier = Modifier.size(18.dp)
-                )
+            if (!selectionMode) {
+                Spacer(Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(ImgColors.AccentViolet)
+                        .clickable { onQuickHq() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.HighQuality,
+                        contentDescription = "Download HQ",
+                        tint = ImgColors.OnAccent,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
     }
@@ -560,6 +669,7 @@ private fun PhotoViewerScreen(
     photo: PhotoItem,
     index: Int,
     total: Int,
+    imageLoader: ImageLoader,
     onBack: () -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
@@ -578,7 +688,8 @@ private fun PhotoViewerScreen(
                 .background(Color.Black)
         ) {
             AsyncImage(
-                model = photo.highResUrl,
+                model = photo.highResUrl.ifBlank { photo.previewUrl },
+                imageLoader = imageLoader,
                 contentDescription = photo.title,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize()
@@ -704,7 +815,7 @@ private fun FiltersSheetContent(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Search Filters", style = MaterialTheme.typography.titleLarge, color = ImgColors.TextPrimary, modifier = Modifier.weight(1f))
-            TextButton(onClick = { onUpdate(SearchFilters()) }) {
+            TextButton(onClick = { onUpdate(SearchFilters(resolution = ResolutionFilter.ANY)) }) {
                 Text("Reset", color = ImgColors.AccentSoft)
             }
         }
