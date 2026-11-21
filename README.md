@@ -1,21 +1,24 @@
-# ImgHunt native Android beta
+# ImgHunt Browser Beta
 
-Kotlin and Jetpack Compose image search with native navigation, a full-screen viewer, saved images and background downloads. This branch is a first development milestone, not a production-ready release.
+A native Android app with a visible in-app browser and a native image tray. This version opens directly into Browse. No gateway URL, app access token, paid API key or server setup is required by the normal app interface.
 
-## Broader web images
+## Use
 
-Configure and host the service in backend/ separately. Enter its HTTPS URL and separate app access token in Android Search settings. The Brave provider key stays on the server. No backend or subscription is activated by this repository.
+1. Open **ImgHunt Browser Beta** and search Google Images, or enter a public HTTPS website.
+2. Long-press an image and choose **Add to tray**, or tap **Collect loaded images**.
+3. Open the native image tray, preview an image, and use the download button to keep a local copy in Pictures/ImgHunt.
 
-Brave returns up to 200 images per query, not unlimited paginated results. Android reveals that batch progressively without a new provider call per scroll. Original-image URLs, source-page links and unknown reuse rights remain distinct. SafeSearch is strict. Missing configuration is shown as setup, not as no search results.
+Phones show the tray beneath the browser; wider screens show it beside the browser. Catalogs, saved-image bookmarks and native downloads remain separate tabs. The temporary tray is not permanent storage. The heart button saves a bookmark; downloading saves a local file.
 
-Open catalogs mode is still available without a gateway, using the selected catalog sources. Optional stock services require your own source key. Source-specific continuation and visible error states replace silent fallback.
+## Honest limits
 
-## Beta APK
+- This browser has an app-local session, not access to your existing Chrome profile or cookies. Google may require an external browser for sign-in. Use Open browser when a site cannot load in WebView.
+- Collection is user-triggered and limited to up to 40 supported loaded images at a time, with an 80-image temporary tray. It does not automatically scroll, read hidden frames, bypass CAPTCHAs, or guarantee full-resolution originals.
+- Supported embedded previews can be copied into private app cache. Downloads use public HTTPS links or those app-owned cached previews; browser cookies and account credentials are not copied into download jobs. Login-protected images may not save.
+- An image result is not a reuse license. Check the source. Unsupported files, HTML disguised as images and oversized downloads are rejected.
 
-The package is com.sandeep.imghunt.beta and the launcher label is ImgHunt Beta. It installs beside the old app; old app data is not migrated. The release variant uses a configured keystore or the existing development-key fallback, not a store-ready production signing setup.
+## Installation and checks
 
-## Verification
+The browser beta uses package com.sandeep.imghunt.browserbeta and installs separately from the older app/beta without deleting their data. It is a development build, not a store-ready production release. Production signing still requires your own securely managed keystore.
 
-CI runs mocked gateway tests, Android unit tests, lint, device-test compilation, and APK builds. Tests under app/src/androidTest must still be RUN on an emulator or phone using ./gradlew connectedDebugAndroidTest. Compiling them is not a device pass. Live provider access needs actual hosting and credentials.
-
-Before public release: live phone/provider tests, accessibility and performance checks, production signing, per-user gateway authentication and quotas, privacy documentation, and security review.
+The workflow runs unit tests, lint, APK builds and Android-emulator UI tests using an offline HTML/image fixture. See the workflow run for actual pass/fail status. Live Google/site behavior still needs testing on your phone. The older gateway source is retained for experiments but is not required by this free browser flow.
