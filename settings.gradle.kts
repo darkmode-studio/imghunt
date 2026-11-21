@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "ImgHunt"
+rootProject.name = "imghunt"
 include(":app")
