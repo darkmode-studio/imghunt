@@ -1,14 +1,19 @@
 package com.sandeep.imghunt.engine
 
-enum class SourceProvider(val label: String, val requiresKey: Boolean = false, val keyGuideUrl: String = "") {
+enum class SourceProvider(val label: String, val requiresKey: Boolean = false) {
     OPENVERSE("Openverse"),
     WIKIMEDIA("Wikimedia Commons"),
     ARCHIVE("Internet Archive"),
     NASA("NASA Images"),
     MET("Met Museum"),
-    UNSPLASH("Unsplash", requiresKey = true, keyGuideUrl = "https://unsplash.com/developers"),
-    PEXELS("Pexels", requiresKey = true, keyGuideUrl = "https://www.pexels.com/api/"),
-    PIXABAY("Pixabay", requiresKey = true, keyGuideUrl = "https://pixabay.com/api/docs/")
+    UNSPLASH("Unsplash", requiresKey = true),
+    PEXELS("Pexels", requiresKey = true),
+    PIXABAY("Pixabay", requiresKey = true)
+}
+
+enum class SortOrder(val label: String) {
+    RELEVANCE("Relevance"),
+    RESOLUTION("Highest Res")
 }
 
 enum class AspectFilter(val label: String) {
@@ -18,11 +23,11 @@ enum class AspectFilter(val label: String) {
     SQUARE("Square")
 }
 
-enum class ResolutionFilter(val label: String, val minWidth: Int, val minHeight: Int) {
+enum class ResolutionFilter(val label: String, val minLongSide: Int, val minShortSide: Int) {
     ANY("Any", 0, 0),
-    HD("HD (1280+)", 1280, 720),
-    FHD("Full HD (1920+)", 1920, 1080),
-    UHD("4K (3840+)", 3840, 2160)
+    HD("HD", 1280, 720),
+    FHD("FHD", 1920, 1080),
+    UHD("4K", 3840, 2160)
 }
 
 enum class FormatFilter(val label: String) {
@@ -37,27 +42,20 @@ enum class LicenseFilter(val label: String) {
     OPEN("Open / CC")
 }
 
-enum class SortOrder(val label: String) {
-    RELEVANCE("Relevance"),
-    RESOLUTION("Highest Res"),
-    SOURCE("Source")
-}
-
 data class SearchFilters(
     val resolution: ResolutionFilter = ResolutionFilter.ANY,
     val aspect: AspectFilter = AspectFilter.ANY,
     val format: FormatFilter = FormatFilter.ANY,
     val license: LicenseFilter = LicenseFilter.ALL,
-    val sortBy: SortOrder = SortOrder.RELEVANCE
+    val sort: SortOrder = SortOrder.RELEVANCE
 ) {
     fun matches(photo: PhotoItem): Boolean {
         val hasDims = photo.width > 0 && photo.height > 0
         if (resolution != ResolutionFilter.ANY) {
             if (!hasDims) return false
-            val maxSide = maxOf(photo.width, photo.height)
-            val minSide = minOf(photo.width, photo.height)
-            val reqMin = minOf(resolution.minHeight, resolution.minWidth)
-            if (maxSide < resolution.minWidth || minSide < (reqMin * 0.6).toInt()) return false
+            val longSide = maxOf(photo.width, photo.height)
+            val shortSide = minOf(photo.width, photo.height)
+            if (longSide < resolution.minLongSide || shortSide < resolution.minShortSide) return false
         }
         if (aspect != AspectFilter.ANY) {
             if (!hasDims) return false
@@ -73,6 +71,7 @@ data class SearchFilters(
         }
         if (format != FormatFilter.ANY) {
             val ext = photo.inferredExtension().uppercase()
+            if (ext == "UNKNOWN") return false
             val expected = if (format == FormatFilter.JPG) setOf("JPG", "JPEG") else setOf(format.name)
             if (ext !in expected) return false
         }
@@ -93,18 +92,35 @@ data class PhotoItem(
     val mimeType: String? = null,
     val isOpenLicense: Boolean = true,
     val licenseLabel: String = "Open / Public",
-    val attribution: String = ""
+    val creator: String? = null
 ) {
     fun inferredExtension(): String {
-        val m = mimeType?.substringAfter("/")?.substringBefore(";")?.lowercase()
+        val m = mimeType?.substringAfter("/")?.substringBefore(";")?.lowercase()?.trim()
         if (!m.isNullOrBlank()) {
-            val mapped = if (m == "jpeg") "jpg" else m
-            if (mapped in setOf("jpg", "png", "webp", "gif", "avif", "tiff", "tif")) return mapped
+            return when (m) {
+                "jpeg" -> "jpg"
+                "svg+xml" -> "svg"
+                else -> m
+            }
         }
-        val clean = highResUrl.substringBefore("?").substringBefore("#").substringAfterLast(".", "").lowercase()
-        return if (clean in setOf("jpg", "jpeg", "png", "webp", "gif", "avif", "tiff", "tif")) {
-            if (clean == "jpeg") "jpg" else clean
-        } else "jpg"
+        val pathOnly = highResUrl.substringBefore("?").substringBefore("#")
+        val ext = pathOnly.substringAfterLast(".", "").lowercase()
+        return when {
+            ext in setOf("jpg", "jpeg") -> "jpg"
+            ext in setOf("png", "webp", "gif", "tif", "tiff", "avif") -> ext
+            else -> "unknown"
+        }
+    }
+
+    fun attributionText(): String {
+        val parts = buildList {
+            add(title)
+            if (!creator.isNullOrBlank()) add("by $creator")
+            add(licenseLabel)
+            add(provider.label)
+            if (sourcePageUrl.startsWith("http")) add(sourcePageUrl)
+        }
+        return parts.joinToString(" · ")
     }
 }
 
