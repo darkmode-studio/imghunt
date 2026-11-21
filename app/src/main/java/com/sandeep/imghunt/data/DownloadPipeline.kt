@@ -15,6 +15,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.sandeep.imghunt.engine.PhotoItem
+import com.sandeep.imghunt.engine.PhotoSources
 import com.sandeep.imghunt.engine.SourceProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -54,31 +55,41 @@ class AppPrefs(context: Context) {
 
 object DownloadPipeline {
 
-    private const val APP_UA = "ImgHunt/1.0 (Android; darkmode-studio/imghunt)"
-
     fun tempFile(context: Context, id: Long): File =
         File(File(context.cacheDir, "imghunt_parts").apply { mkdirs() }, "$id.part")
 
-    fun buildFileName(item: PhotoItem, mime: String): String {
-        val ext = when {
-            mime.contains("png", true) -> "png"
-            mime.contains("webp", true) -> "webp"
-            mime.contains("gif", true) -> "gif"
-            else -> item.inferredExtension().takeIf { it in setOf("jpg", "jpeg", "png", "webp", "gif") }?.replace("jpeg", "jpg") ?: "jpg"
+    fun extFromMime(mime: String?): String? {
+        val clean = mime?.substringAfter("/")?.substringBefore(";")?.lowercase()?.trim().orEmpty()
+        return when {
+            clean.isEmpty() -> null
+            clean == "jpeg" -> "jpg"
+            clean == "svg+xml" -> null
+            else -> clean
         }
+    }
+
+    fun mimeFromExt(ext: String): String = when (ext.lowercase()) {
+        "png" -> "image/png"
+        "webp" -> "image/webp"
+        "gif" -> "image/gif"
+        else -> "image/jpeg"
+    }
+
+    fun buildFileName(item: PhotoItem, mime: String?): String {
+        val ext = extFromMime(mime)
+            ?: item.inferredExtension().takeIf { it in setOf("jpg", "png", "webp", "gif", "tif", "tiff", "avif") }
+            ?: "jpg"
         val cleanTitle = item.title.replace(Regex("[^A-Za-z0-9._-]+"), "_").trim('_').take(36).ifBlank { item.id }
         val dims = if (item.width > 0 && item.height > 0) "_${item.width}x${item.height}" else ""
         return "ImgHunt_${cleanTitle}${dims}.$ext"
     }
 
-    fun enqueueHighRes(context: Context, item: PhotoItem) {
+    suspend fun enqueueHighRes(context: Context, item: PhotoItem) = withContext(Dispatchers.IO) {
         val dao = ImgHuntDb.get(context).dao()
-        val mime = item.mimeType?.takeIf { it.startsWith("image/") } ?: when (item.inferredExtension()) {
-            "png" -> "image/png"
-            "webp" -> "image/webp"
-            "gif" -> "image/gif"
-            else -> "image/jpeg"
-        }
+        val initialExt = extFromMime(item.mimeType)
+            ?: item.inferredExtension().takeIf { it in setOf("jpg", "png", "webp", "gif") }
+            ?: "jpg"
+        val mime = mimeFromExt(initialExt)
         val fileName = buildFileName(item, mime)
         val record = DownloadRecord(
             photoId = item.id,
@@ -90,13 +101,32 @@ object DownloadPipeline {
             fileName = fileName,
             status = "queued"
         )
+        val id = dao.insert(record)
+        val req = OneTimeWorkRequestBuilder<HighResDownloadWorker>()
+            .setInputData(workDataOf("record_id" to id))
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork("imghunt_dl_$id", ExistingWorkPolicy.REPLACE, req)
+    }
+
+    fun retryDownload(context: Context, record: DownloadRecord) {
+        val dao = ImgHuntDb.get(context).dao()
         kotlinx.coroutines.runBlocking(Dispatchers.IO) {
-            val id = dao.insert(record)
+            dao.update(record.copy(status = "queued", error = null, bytesDone = 0L))
             val req = OneTimeWorkRequestBuilder<HighResDownloadWorker>()
-                .setInputData(workDataOf("record_id" to id))
+                .setInputData(workDataOf("record_id" to record.id))
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .build()
-            WorkManager.getInstance(context).enqueueUniqueWork("imghunt_dl_$id", ExistingWorkPolicy.REPLACE, req)
+            WorkManager.getInstance(context).enqueueUniqueWork("imghunt_dl_${record.id}", ExistingWorkPolicy.REPLACE, req)
+        }
+    }
+
+    fun cancelDownload(context: Context, record: DownloadRecord) {
+        WorkManager.getInstance(context).cancelUniqueWork("imghunt_dl_${record.id}")
+        tempFile(context, record.id).delete()
+        val dao = ImgHuntDb.get(context).dao()
+        kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+            dao.update(record.copy(status = "failed", error = "Cancelled"))
         }
     }
 
@@ -141,7 +171,7 @@ class HighResDownloadWorker(appContext: Context, params: WorkerParameters) : Cor
         if (recordId <= 0L) return@withContext Result.failure()
         val dao = ImgHuntDb.get(applicationContext).dao()
         val rec = dao.getById(recordId) ?: return@withContext Result.success()
-        dao.update(rec.copy(status = "running", error = null))
+        dao.update(rec.copy(status = "running", error = null, bytesDone = 0L))
         val part = DownloadPipeline.tempFile(applicationContext, recordId)
         try {
             val conn = (URL(rec.highResUrl).openConnection() as HttpURLConnection).apply {
@@ -149,28 +179,44 @@ class HighResDownloadWorker(appContext: Context, params: WorkerParameters) : Cor
                 connectTimeout = 15000
                 readTimeout = 30000
                 instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "ImgHunt/1.0 (Android; darkmode-studio/imghunt)")
+                setRequestProperty("User-Agent", PhotoSources.APP_UA)
                 setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
                 if (rec.sourcePageUrl.startsWith("http")) setRequestProperty("Referer", rec.sourcePageUrl)
             }
             var totalBytes = 0L
             var resolvedMime = rec.mimeType
+            var magicDetectedMime: String? = null
+            var written = 0L
             try {
                 val code = conn.responseCode
                 if (code !in 200..299) error("HTTP $code")
-                conn.contentType?.substringBefore(";")?.trim()?.takeIf { it.startsWith("image/") }?.let { resolvedMime = it }
+                conn.contentType?.substringBefore(";")?.trim()?.takeIf { it.startsWith("image/") }?.let {
+                    if (DownloadPipeline.extFromMime(it) != null) resolvedMime = it
+                }
                 val contentLen = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) conn.contentLengthLong else conn.contentLength.toLong()
                 if (contentLen > 0) totalBytes = contentLen
+                dao.update(dao.getById(recordId)!!.copy(bytesTotal = totalBytes))
 
-                var written = 0L
                 val buf = ByteArray(65536)
+                var lastReportMs = System.currentTimeMillis()
                 conn.inputStream.use { input ->
                     FileOutputStream(part).use { out ->
                         while (true) {
+                            if (isStopped) error("Cancelled")
                             val read = input.read(buf)
                             if (read <= 0) break
+                            if (magicDetectedMime == null) {
+                                magicDetectedMime = PhotoSources.sniffMimeFromBytes(buf.copyOfRange(0, read))
+                            }
                             out.write(buf, 0, read)
                             written += read
+                            val now = System.currentTimeMillis()
+                            if (now - lastReportMs >= 250L) {
+                                lastReportMs = now
+                                dao.getById(recordId)?.let { cur ->
+                                    dao.update(cur.copy(bytesDone = written, bytesTotal = if (totalBytes > 0L) totalBytes else cur.bytesTotal))
+                                }
+                            }
                         }
                     }
                 }
@@ -180,17 +226,18 @@ class HighResDownloadWorker(appContext: Context, params: WorkerParameters) : Cor
                 conn.disconnect()
             }
 
+            val finalMime = magicDetectedMime ?: resolvedMime
             val finalName = DownloadPipeline.buildFileName(
-                PhotoItem(rec.photoId, rec.title, "", rec.highResUrl, rec.sourcePageUrl, SourceProvider.OPENVERSE, mimeType = resolvedMime),
-                resolvedMime
+                PhotoItem(rec.photoId, rec.title, "", rec.highResUrl, rec.sourcePageUrl, SourceProvider.OPENVERSE, mimeType = finalMime),
+                finalMime
             )
-            val savedUri = DownloadPipeline.saveToGallery(applicationContext, part, finalName, resolvedMime)
+            val savedUri = DownloadPipeline.saveToGallery(applicationContext, part, finalName, finalMime)
             part.delete()
             dao.update(
                 dao.getById(recordId)!!.copy(
                     status = "done",
                     fileName = finalName,
-                    mimeType = resolvedMime,
+                    mimeType = finalMime,
                     savedUri = savedUri.toString(),
                     bytesTotal = totalBytes,
                     bytesDone = totalBytes,
@@ -201,7 +248,7 @@ class HighResDownloadWorker(appContext: Context, params: WorkerParameters) : Cor
         } catch (t: Throwable) {
             part.delete()
             dao.getById(recordId)?.let { cur ->
-                dao.update(cur.copy(status = "failed", error = t.message ?: "Download failed"))
+                dao.update(cur.copy(status = "failed", bytesDone = written, error = t.message ?: "Download failed"))
             }
             Result.failure()
         }
