@@ -6,8 +6,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: imghunt-${{ github.ref }}
-  cancel-in-progress: true
+  group: imghunt-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
 jobs:
   gateway-tests:
     runs-on: ubuntu-24.04
@@ -36,6 +36,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
       - name: Prepare Android build
         run: |
           chmod +x gradlew
@@ -79,6 +80,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
       - name: Enable emulator acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
