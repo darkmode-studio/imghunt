@@ -1,14 +1,14 @@
 package com.sandeep.imghunt.engine
 
-enum class SourceProvider(val label: String, val requiresKey: Boolean = false) {
+enum class SourceProvider(val label: String, val requiresKey: Boolean = false, val keyGuideUrl: String = "") {
     OPENVERSE("Openverse"),
     WIKIMEDIA("Wikimedia Commons"),
     ARCHIVE("Internet Archive"),
     NASA("NASA Images"),
     MET("Met Museum"),
-    UNSPLASH("Unsplash", requiresKey = true),
-    PEXELS("Pexels", requiresKey = true),
-    PIXABAY("Pixabay", requiresKey = true)
+    UNSPLASH("Unsplash", requiresKey = true, keyGuideUrl = "https://unsplash.com/developers"),
+    PEXELS("Pexels", requiresKey = true, keyGuideUrl = "https://www.pexels.com/api/"),
+    PIXABAY("Pixabay", requiresKey = true, keyGuideUrl = "https://pixabay.com/api/docs/")
 }
 
 enum class AspectFilter(val label: String) {
@@ -37,18 +37,30 @@ enum class LicenseFilter(val label: String) {
     OPEN("Open / CC")
 }
 
+enum class SortOrder(val label: String) {
+    RELEVANCE("Relevance"),
+    RESOLUTION("Highest Res"),
+    SOURCE("Source")
+}
+
 data class SearchFilters(
     val resolution: ResolutionFilter = ResolutionFilter.ANY,
     val aspect: AspectFilter = AspectFilter.ANY,
     val format: FormatFilter = FormatFilter.ANY,
-    val license: LicenseFilter = LicenseFilter.ALL
+    val license: LicenseFilter = LicenseFilter.ALL,
+    val sortBy: SortOrder = SortOrder.RELEVANCE
 ) {
     fun matches(photo: PhotoItem): Boolean {
-        if (resolution != ResolutionFilter.ANY && photo.width > 0 && photo.height > 0) {
+        val hasDims = photo.width > 0 && photo.height > 0
+        if (resolution != ResolutionFilter.ANY) {
+            if (!hasDims) return false
             val maxSide = maxOf(photo.width, photo.height)
-            if (maxSide < resolution.minWidth) return false
+            val minSide = minOf(photo.width, photo.height)
+            val reqMin = minOf(resolution.minHeight, resolution.minWidth)
+            if (maxSide < resolution.minWidth || minSide < (reqMin * 0.6).toInt()) return false
         }
-        if (aspect != AspectFilter.ANY && photo.width > 0 && photo.height > 0) {
+        if (aspect != AspectFilter.ANY) {
+            if (!hasDims) return false
             when (aspect) {
                 AspectFilter.LANDSCAPE -> if (photo.width <= photo.height) return false
                 AspectFilter.PORTRAIT -> if (photo.height <= photo.width) return false
@@ -80,13 +92,19 @@ data class PhotoItem(
     val height: Int = 0,
     val mimeType: String? = null,
     val isOpenLicense: Boolean = true,
-    val licenseLabel: String = "Open / Public"
+    val licenseLabel: String = "Open / Public",
+    val attribution: String = ""
 ) {
     fun inferredExtension(): String {
         val m = mimeType?.substringAfter("/")?.substringBefore(";")?.lowercase()
-        if (!m.isNullOrBlank()) return if (m == "jpeg") "jpg" else m
-        val clean = highResUrl.substringBefore("?").substringBefore("#").substringAfterLast(".", "")
-        return clean.lowercase().ifBlank { "jpg" }
+        if (!m.isNullOrBlank()) {
+            val mapped = if (m == "jpeg") "jpg" else m
+            if (mapped in setOf("jpg", "png", "webp", "gif", "avif", "tiff", "tif")) return mapped
+        }
+        val clean = highResUrl.substringBefore("?").substringBefore("#").substringAfterLast(".", "").lowercase()
+        return if (clean in setOf("jpg", "jpeg", "png", "webp", "gif", "avif", "tiff", "tif")) {
+            if (clean == "jpeg") "jpg" else clean
+        } else "jpg"
     }
 }
 
