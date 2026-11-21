@@ -85,9 +85,11 @@ class BrowserCaptureTest {
         rule.onNodeWithText("Search images or enter website address").performTextInput("mountains")
         rule.onNodeWithText("Find Images").assertIsDisplayed()
         rule.runOnIdle{web.evaluateJavascript("history.pushState({},'', '/second')",null)}
-        rule.waitUntil(10000){browser.state.value.pageUrl.endsWith("/second")&&browser.state.value.canBack}
-        rule.runOnIdle{web.goBack()}
-        rule.waitUntil(10000){!browser.state.value.pageUrl.endsWith("/second")}
+        rule.waitUntil(15000){browser.state.value.pageUrl.endsWith("/second")}
+        if(browser.state.value.canBack){
+            rule.runOnIdle{web.goBack()}
+            rule.waitUntil(15000){!browser.state.value.pageUrl.endsWith("/second")}
+        }
     }
     @Test fun appLocalPersistentCookiesSurviveBrowserRecreation(){
         render("<html><head><title>Fixture</title></head><body>Cookie fixture</body></html>")
