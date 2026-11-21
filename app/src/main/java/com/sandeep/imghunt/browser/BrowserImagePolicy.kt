@@ -7,7 +7,8 @@ import java.net.URLEncoder
 import java.security.MessageDigest
 
 data class BrowserCandidate(val src: String, val page: String, val title: String = "Website image",
-    val anchor: String = "", val width: Int = 0, val height: Int = 0)
+    val anchor: String = "", val width: Int = 0, val height: Int = 0,
+    val options: List<BrowserImageOption> = emptyList())
 object BrowserImagePolicy {
     const val MAX_TRAY = 80
     const val MAX_EMBEDDED_CHARS = 262144
@@ -26,19 +27,18 @@ object BrowserImagePolicy {
     }
     fun https(value: String): String? = runCatching {
         require(value.length <= 8192 && value.none { it.isISOControl() })
-        val uri = URI(value.trim())
-        val host = requireNotNull(uri.host).lowercase().trim('[', ']')
+        val uri = URI(value.trim()); val host = requireNotNull(uri.host).lowercase().trim('[', ']')
         require(uri.scheme.equals("https", true) && uri.userInfo == null && uri.port in -1..65535)
         require(host != "localhost" && !host.endsWith(".local") && !host.endsWith(".localhost"))
-        if (host.contains(':') || host.matches(Regex("[0-9.]+"))) require(publicAddress(InetAddress.getByName(host)))
-        else require(host.contains('.'))
+        if (host.contains(':') || host.matches(Regex("[0-9.]+"))) require(publicAddress(InetAddress.getByName(host))) else require(host.contains('.'))
         uri.toASCIIString().substringBefore('#')
     }.getOrNull()
     fun address(input: String): String {
-        val value = input.trim()
-        require(value.isNotBlank()) { "Enter a search term or HTTPS address" }
+        val value = input.trim(); require(value.isNotBlank()) { "Enter a search term or HTTPS address" }
         if (value.startsWith("https://", true)) return https(value) ?: error("Use a public HTTPS website")
         require(!value.contains("://")) { "Only HTTPS websites are supported" }
+        if (!value.contains(' ') && value.matches(Regex("[A-Za-z0-9.-]+\\.[A-Za-z]{2,}(?:/.*)?")))
+            return https("https://$value") ?: error("Use a public HTTPS website")
         return "https://www.google.com/search?tbm=isch&q=" + URLEncoder.encode(value.take(400), "UTF-8")
     }
     fun embedded(src: String): Boolean = src.length <= MAX_EMBEDDED_CHARS &&
@@ -48,33 +48,24 @@ object BrowserImagePolicy {
         val pair = it.split('=', limit = 2)
         if (pair.size == 2 && pair[0] == key) runCatching { URLDecoder.decode(pair[1], "UTF-8") }.getOrNull() else null
     }
-    fun imageUrl(candidate: BrowserCandidate): String? {
-        https(candidate.anchor)?.let { anchor ->
-            val uri = URI(anchor)
-            if (google(uri)) parameter(uri.rawQuery, "imgurl")?.let { https(it)?.let { full -> return full } }
+    fun alternatives(candidate: BrowserCandidate): List<BrowserImageOption> = buildList {
+        https(candidate.anchor)?.let { value ->
+            val uri = URI(value)
+            if (google(uri)) parameter(uri.rawQuery, "imgurl")?.let { https(it)?.let { url -> add(BrowserImageOption(url, kind = "Original link")) } }
         }
-        return https(candidate.src)
-    }
+        addAll(candidate.options.take(16).mapNotNull { option -> https(option.url)?.let { option.copy(url = it, width = option.width.coerceIn(0,100000), height = option.height.coerceIn(0,100000)) } }
+            .sortedWith(compareByDescending<BrowserImageOption> { if (it.kind == "Original link") 10000000 else if (it.kind == "Original hint") 9000000 else it.width }))
+        https(candidate.src)?.let { add(BrowserImageOption(it, candidate.width, candidate.height, "Displayed image")) }
+    }.distinctBy { it.url }
+    fun imageUrl(candidate: BrowserCandidate): String? = alternatives(candidate).firstOrNull()?.url
     fun sourceUrl(candidate: BrowserCandidate): String {
         https(candidate.anchor)?.let { anchor ->
             val uri = URI(anchor)
             if (google(uri)) parameter(uri.rawQuery, "imgrefurl")?.let { https(it)?.let { source -> return source } }
+            else if (!uri.path.orEmpty().matches(Regex(".*\\.(jpg|jpeg|png|webp|gif|avif)", RegexOption.IGNORE_CASE))) return anchor
         }
         return https(candidate.page) ?: "https://www.google.com/imghp"
     }
-    fun id(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).take(12)
-        .joinToString("") { "%02x".format(it.toInt() and 255) }
-    val collectScript = """(function(){
-      var out=[],seen={},budget=0,imgs=document.images;
-      for(var i=0;i<imgs.length && out.length<40;i++){
-        var im=imgs[i],src=im.currentSrc||im.src||'';
-        if(!im.complete||im.naturalWidth<80||im.naturalHeight<80||seen[src])continue;
-        if(src.indexOf('https://')!==0&&src.indexOf('data:image/')!==0)continue;
-        if(src.length>262144)continue;
-        var a=im.closest?im.closest('a'):null;
-        var item={src:src,anchor:a?a.href:'',title:(im.alt||document.title||'Website image').slice(0,160),width:im.naturalWidth,height:im.naturalHeight};
-        var text=JSON.stringify(item);if(budget+text.length>350000)break;
-        budget+=text.length;seen[src]=true;out.push(item);
-      }return JSON.stringify(out);
-    })()""".trimIndent()
+    fun id(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).take(12).joinToString("") { "%02x".format(it.toInt() and 255) }
+    val collectScript: String get() = BrowserImageDiscovery.script
 }
