@@ -48,7 +48,6 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.ImageSearch
 import androidx.compose.material.icons.outlined.Lock
@@ -56,7 +55,7 @@ import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SelectAll
-import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -87,7 +86,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -116,7 +114,7 @@ import kotlinx.coroutines.launch
 
 private enum class HuntTab(val label: String) {
     SEARCH("Hunt"),
-    DOWNLOADS("Saved")
+    DOWNLOADS("Downloads")
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -156,7 +154,7 @@ fun ImgHuntApp() {
     fun runSearch(customQuery: String? = null) {
         val q = (customQuery ?: query).trim()
         if (q.isEmpty()) {
-            statusBanner = "Type a keyword to hunt high-res images"
+            statusBanner = "Type a keyword to search high-res photos"
             return
         }
         if (customQuery != null) query = q
@@ -171,25 +169,24 @@ fun ImgHuntApp() {
             isSearching = false
             val fallbackUsed = states.any { it.usedFallback && it.items.isNotEmpty() }
             statusBanner = when {
-                found.isEmpty() -> "No matching images returned by active APIs"
-                fallbackUsed -> "${found.size} results via automatic fallback"
-                else -> "${found.size} high-res images ready"
+                found.isEmpty() -> "No matching images returned"
+                fallbackUsed -> "${found.size} results (fallback active)"
+                else -> "${found.size} results"
             }
         }
     }
 
-    fun downloadSelected() {
-        val chosen = results.filter { it.id in selectedIds }
-        if (chosen.isEmpty()) return
-        chosen.forEach { DownloadPipeline.enqueueHighRes(context, it) }
-        Toast.makeText(context, "Queued ${chosen.size} HQ downloads", Toast.LENGTH_SHORT).show()
+    fun downloadBatch(items: List<PhotoItem>) {
+        if (items.isEmpty()) return
+        items.forEach { DownloadPipeline.enqueueHighRes(context, it) }
+        Toast.makeText(context, "Queued ${items.size} HQ download${if (items.size > 1) "s" else ""}", Toast.LENGTH_SHORT).show()
         selectedIds = emptySet()
     }
 
     val selectedPhoto = activePhotoIndex?.let { idx -> results.getOrNull(idx) }
     if (selectedPhoto != null && activePhotoIndex != null) {
         BackHandler { activePhotoIndex = null }
-        PhotoViewerScreen(
+        PixViewerSheet(
             photo = selectedPhoto,
             index = activePhotoIndex!!,
             total = results.size,
@@ -197,10 +194,7 @@ fun ImgHuntApp() {
             onBack = { activePhotoIndex = null },
             onPrev = { if (activePhotoIndex!! > 0) activePhotoIndex = activePhotoIndex!! - 1 },
             onNext = { if (activePhotoIndex!! < results.size - 1) activePhotoIndex = activePhotoIndex!! + 1 },
-            onDownloadHq = { item ->
-                DownloadPipeline.enqueueHighRes(context, item)
-                Toast.makeText(context, "Queued HQ download: ${item.title}", Toast.LENGTH_SHORT).show()
-            }
+            onDownloadHq = { item -> downloadBatch(listOf(item)) }
         )
         return
     }
@@ -217,94 +211,73 @@ fun ImgHuntApp() {
                     Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
                 ) {
                     if (selectionMode) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            IconButton(onClick = { selectedIds = emptySet() }) {
-                                Icon(Icons.Outlined.Close, contentDescription = "Cancel selection", tint = ImgColors.TextPrimary)
-                            }
-                            Text(
-                                text = "${selectedIds.size} selected",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                color = ImgColors.TextPrimary,
-                                modifier = Modifier.weight(1f)
-                            )
-                            TextButton(
-                                onClick = {
-                                    selectedIds = if (selectedIds.size == results.size) emptySet() else results.map { it.id }.toSet()
-                                }
-                            ) {
-                                Icon(Icons.Outlined.SelectAll, contentDescription = null, tint = ImgColors.AccentSoft, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text(if (selectedIds.size == results.size) "None" else "All", color = ImgColors.AccentSoft)
-                            }
-                            Button(
-                                onClick = { downloadSelected() },
-                                colors = ButtonDefaults.buttonColors(containerColor = ImgColors.AccentViolet, contentColor = ImgColors.OnAccent)
-                            ) {
-                                Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("HQ (${selectedIds.size})")
-                            }
-                        }
-                    } else {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
+                        Surface(
+                            color = ImgColors.SurfaceElevated,
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.dp, ImgColors.AccentViolet.copy(alpha = 0.6f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
                                 modifier = Modifier
-                                    .size(34.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(ImgColors.AccentViolet.copy(alpha = 0.18f)),
-                                contentAlignment = Alignment.Center
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.ImageSearch,
-                                    contentDescription = "imghunt",
-                                    tint = ImgColors.AccentSoft,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
+                                IconButton(onClick = { selectedIds = emptySet() }) {
+                                    Icon(Icons.Outlined.Close, contentDescription = "Close", tint = ImgColors.TextPrimary)
+                                }
                                 Text(
-                                    text = "imghunt",
-                                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                                    color = ImgColors.TextPrimary
+                                    text = "${selectedIds.size} selected",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    color = ImgColors.TextPrimary,
+                                    modifier = Modifier.weight(1f)
                                 )
-                                Text(
-                                    text = "Direct HQ API image search",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ImgColors.TextMuted
-                                )
-                            }
-                            IconButton(onClick = { showFilterSheet = true }) {
-                                Icon(Icons.Outlined.FilterList, contentDescription = "Filters", tint = ImgColors.TextPrimary)
-                            }
-                            IconButton(onClick = { showSettingsSheet = true }) {
-                                Icon(Icons.Outlined.Settings, contentDescription = "Sources & Keys", tint = ImgColors.TextPrimary)
+                                TextButton(
+                                    onClick = {
+                                        selectedIds = if (selectedIds.size == results.size) emptySet() else results.map { it.id }.toSet()
+                                    }
+                                ) {
+                                    Icon(Icons.Outlined.SelectAll, contentDescription = null, tint = ImgColors.AccentSoft, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(if (selectedIds.size == results.size) "Clear" else "All", color = ImgColors.AccentSoft)
+                                }
+                                Button(
+                                    onClick = { downloadBatch(results.filter { it.id in selectedIds }) },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = ImgColors.AccentViolet, contentColor = ImgColors.OnAccent)
+                                ) {
+                                    Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("HQ (${selectedIds.size})")
+                                }
                             }
                         }
-                    }
-
-                    if (tab == HuntTab.SEARCH && !selectionMode) {
-                        Spacer(Modifier.height(10.dp))
+                    } else if (tab == HuntTab.SEARCH) {
                         OutlinedTextField(
                             value = query,
                             onValueChange = { query = it },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            placeholder = { Text("Search photos, people, nature…", color = ImgColors.TextMuted) },
-                            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = ImgColors.TextMuted) },
+                            placeholder = { Text("Search high-res images…", color = ImgColors.TextMuted) },
+                            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = ImgColors.AccentSoft) },
                             trailingIcon = {
-                                if (query.isNotBlank()) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (query.isNotBlank()) {
+                                        IconButton(onClick = { query = ""; results = emptyList(); statusBanner = null }) {
+                                            Icon(Icons.Outlined.Close, contentDescription = "Clear query", tint = ImgColors.TextMuted)
+                                        }
+                                    }
                                     TextButton(onClick = { runSearch() }) {
-                                        Text("Go", color = ImgColors.AccentSoft, fontWeight = FontWeight.SemiBold)
+                                        Text("Search", color = ImgColors.AccentSoft, fontWeight = FontWeight.SemiBold)
                                     }
                                 }
                             },
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(onSearch = { runSearch() }),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(22.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = ImgColors.SurfaceCard,
                                 unfocusedContainerColor = ImgColors.SurfaceCard,
@@ -317,53 +290,77 @@ fun ImgHuntApp() {
 
                         Spacer(Modifier.height(8.dp))
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            ResolutionFilter.entries.forEach { rf ->
-                                FilterChip(
-                                    selected = filters.resolution == rf,
-                                    onClick = {
-                                        filters = filters.copy(resolution = rf)
-                                        if (query.isNotBlank() && results.isNotEmpty()) runSearch()
-                                    },
-                                    label = { Text(rf.label) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        containerColor = ImgColors.SurfaceCard,
-                                        labelColor = ImgColors.TextMuted,
-                                        selectedContainerColor = ImgColors.AccentViolet.copy(alpha = 0.24f),
-                                        selectedLabelColor = ImgColors.TextPrimary
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                ResolutionFilter.entries.forEach { rf ->
+                                    FilterChip(
+                                        selected = filters.resolution == rf,
+                                        onClick = {
+                                            filters = filters.copy(resolution = rf)
+                                            if (query.isNotBlank() && results.isNotEmpty()) runSearch()
+                                        },
+                                        label = { Text(rf.label) },
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            containerColor = ImgColors.SurfaceCard,
+                                            labelColor = ImgColors.TextMuted,
+                                            selectedContainerColor = ImgColors.AccentViolet.copy(alpha = 0.25f),
+                                            selectedLabelColor = ImgColors.TextPrimary
+                                        )
                                     )
-                                )
+                                }
                             }
-                            AspectFilter.entries.filter { it != AspectFilter.ANY }.forEach { af ->
-                                FilterChip(
-                                    selected = filters.aspect == af,
-                                    onClick = {
-                                        val nextAspect = if (filters.aspect == af) AspectFilter.ANY else af
-                                        filters = filters.copy(aspect = nextAspect)
-                                        if (query.isNotBlank() && results.isNotEmpty()) runSearch()
-                                    },
-                                    label = { Text(af.label) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        containerColor = ImgColors.SurfaceCard,
-                                        labelColor = ImgColors.TextMuted,
-                                        selectedContainerColor = ImgColors.AccentViolet.copy(alpha = 0.24f),
-                                        selectedLabelColor = ImgColors.TextPrimary
-                                    )
-                                )
+                            Spacer(Modifier.width(6.dp))
+                            Surface(
+                                color = ImgColors.SurfaceCard,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, ImgColors.BorderSubtle),
+                                modifier = Modifier.clickable { showFilterSheet = true }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Outlined.Tune, contentDescription = "More filters", tint = ImgColors.TextPrimary, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("More", style = MaterialTheme.typography.labelMedium, color = ImgColors.TextPrimary)
+                                }
+                            }
+                            Spacer(Modifier.width(6.dp))
+                            Surface(
+                                color = ImgColors.SurfaceCard,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, ImgColors.BorderSubtle),
+                                modifier = Modifier.clickable { showSettingsSheet = true }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("${enabledProviders.size} APIs", style = MaterialTheme.typography.labelMedium, color = ImgColors.AccentSoft)
+                                }
                             }
                         }
 
                         if (statusBanner != null) {
-                            Spacer(Modifier.height(6.dp))
+                            Spacer(Modifier.height(4.dp))
                             Text(
                                 text = statusBanner!!,
                                 style = MaterialTheme.typography.labelMedium,
-                                color = if (results.isEmpty() && !isSearching) ImgColors.Warning else ImgColors.AccentSoft
+                                color = if (results.isEmpty() && !isSearching) ImgColors.Warning else ImgColors.TextMuted
                             )
+                        }
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Text("Downloads", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold), color = ImgColors.TextPrimary, modifier = Modifier.weight(1f))
+                            Text("Pictures/ImgHunt", style = MaterialTheme.typography.labelMedium, color = ImgColors.TextMuted)
                         }
                     }
                 }
@@ -378,16 +375,16 @@ fun ImgHuntApp() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(horizontal = 24.dp, vertical = 8.dp),
+                        .padding(horizontal = 24.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
                     HuntTab.entries.forEach { t ->
-                        val selected = tab == t
-                        val labelText = if (t == HuntTab.DOWNLOADS && downloads.isNotEmpty()) "${t.label} (${downloads.size})" else t.label
+                        val active = tab == t
+                        val label = if (t == HuntTab.DOWNLOADS && downloads.isNotEmpty()) "${t.label} (${downloads.size})" else t.label
                         TextButton(
                             onClick = { tab = t },
                             colors = ButtonDefaults.textButtonColors(
-                                contentColor = if (selected) ImgColors.AccentSoft else ImgColors.TextMuted
+                                contentColor = if (active) ImgColors.AccentSoft else ImgColors.TextMuted
                             )
                         ) {
                             Icon(
@@ -396,7 +393,7 @@ fun ImgHuntApp() {
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(labelText, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+                            Text(label, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium)
                         }
                     }
                 }
@@ -419,30 +416,27 @@ fun ImgHuntApp() {
             when (tab) {
                 HuntTab.SEARCH -> {
                     if (results.isEmpty() && !isSearching) {
-                        EmptyHuntState(onPickPreset = { preset -> runSearch(preset) })
+                        PixEmptyState(onPickPreset = { preset -> runSearch(preset) })
                     } else {
                         LazyVerticalGrid(
-                            columns = GridCells.Adaptive(minSize = 165.dp),
-                            contentPadding = PaddingValues(12.dp),
+                            columns = GridCells.Adaptive(minSize = 170.dp),
+                            contentPadding = PaddingValues(10.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
                             itemsIndexed(results, key = { _, item -> item.id }) { idx, item ->
                                 val isSelected = item.id in selectedIds
-                                PhotoGridCard(
+                                PixPhotoTile(
                                     item = item,
                                     selected = isSelected,
                                     selectionMode = selectionMode,
                                     imageLoader = imageLoader,
-                                    onOpen = {
+                                    onTap = {
                                         if (selectionMode) toggleSelect(item) else activePhotoIndex = idx
                                     },
-                                    onToggleSelect = { toggleSelect(item) },
-                                    onQuickHq = {
-                                        DownloadPipeline.enqueueHighRes(context, item)
-                                        Toast.makeText(context, "Downloading HQ: ${item.title}", Toast.LENGTH_SHORT).show()
-                                    }
+                                    onLongPress = { toggleSelect(item) },
+                                    onDownloadHq = { downloadBatch(listOf(item)) }
                                 )
                             }
                         }
@@ -450,11 +444,9 @@ fun ImgHuntApp() {
                 }
 
                 HuntTab.DOWNLOADS -> {
-                    DownloadsListScreen(
+                    DownloadsTabContent(
                         records = downloads,
-                        onClearFinished = {
-                            scope.launch { db.dao().clearFinished() }
-                        }
+                        onClearFinished = { scope.launch { db.dao().clearFinished() } }
                     )
                 }
             }
@@ -467,7 +459,7 @@ fun ImgHuntApp() {
             containerColor = ImgColors.SurfaceCard,
             contentColor = ImgColors.TextPrimary
         ) {
-            FiltersSheetContent(
+            PixFilterSheet(
                 filters = filters,
                 onUpdate = { filters = it },
                 onApply = {
@@ -484,7 +476,7 @@ fun ImgHuntApp() {
             containerColor = ImgColors.SurfaceCard,
             contentColor = ImgColors.TextPrimary
         ) {
-            SourcesSettingsSheet(
+            PixSourcesSheet(
                 enabledProviders = enabledProviders,
                 apiKeys = apiKeys,
                 providerStates = providerStates,
@@ -506,8 +498,8 @@ fun ImgHuntApp() {
 }
 
 @Composable
-private fun EmptyHuntState(onPickPreset: (String) -> Unit) {
-    val presets = listOf("Kerala monsoon", "Minimal architecture", "Deep space", "Mountain mist")
+private fun PixEmptyState(onPickPreset: (String) -> Unit) {
+    val suggestions = listOf("Kerala hills", "Street photography", "Minimalist architecture", "Night sky")
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -515,28 +507,28 @@ private fun EmptyHuntState(onPickPreset: (String) -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(
-            imageVector = Icons.Outlined.ImageSearch,
-            contentDescription = null,
-            tint = ImgColors.AccentSoft,
-            modifier = Modifier.size(48.dp)
-        )
-        Spacer(Modifier.height(12.dp))
-        Text("Search & download high-res images", style = MaterialTheme.typography.titleMedium, color = ImgColors.TextPrimary)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Structured API search with automatic source fallback and one-tap high-res saving.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = ImgColors.TextMuted
-        )
-        Spacer(Modifier.height(16.dp))
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(ImgColors.SurfaceCard),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Outlined.ImageSearch, contentDescription = null, tint = ImgColors.AccentSoft, modifier = Modifier.size(28.dp))
+        }
+        Spacer(Modifier.height(14.dp))
+        Text("imghunt", style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold), color = ImgColors.TextPrimary)
+        Spacer(Modifier.height(4.dp))
+        Text("Fast structured image search with automatic source fallback & direct HQ download.", style = MaterialTheme.typography.bodyMedium, color = ImgColors.TextMuted)
+        Spacer(Modifier.height(18.dp))
         Row(
             modifier = Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            presets.forEach { label ->
+            suggestions.forEach { label ->
                 OutlinedButton(
                     onClick = { onPickPreset(label) },
+                    shape = RoundedCornerShape(12.dp),
                     border = BorderStroke(1.dp, ImgColors.BorderSubtle)
                 ) {
                     Text(label, color = ImgColors.TextPrimary)
@@ -548,124 +540,124 @@ private fun EmptyHuntState(onPickPreset: (String) -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PhotoGridCard(
+private fun PixPhotoTile(
     item: PhotoItem,
     selected: Boolean,
     selectionMode: Boolean,
     imageLoader: ImageLoader,
-    onOpen: () -> Unit,
-    onToggleSelect: () -> Unit,
-    onQuickHq: () -> Unit
+    onTap: () -> Unit,
+    onLongPress: () -> Unit,
+    onDownloadHq: () -> Unit
 ) {
     val context = LocalContext.current
-    val thumbUrl = item.previewUrl.ifBlank { item.highResUrl }
-    val request = remember(thumbUrl) {
+    val primaryUrl = item.previewUrl.ifBlank { item.highResUrl }
+    var currentUrl by remember(item.id) { mutableStateOf(primaryUrl) }
+    var failedPrimary by remember(item.id) { mutableStateOf(false) }
+
+    val request = remember(currentUrl) {
         ImageRequest.Builder(context)
-            .data(thumbUrl)
-            .size(640)
+            .data(currentUrl)
+            .size(720)
             .build()
     }
-    Box(
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(0.82f)
-            .clip(RoundedCornerShape(16.dp))
-            .background(ImgColors.SurfaceElevated)
+            .clip(RoundedCornerShape(14.dp))
+            .background(ImgColors.SurfaceCard)
             .border(
                 width = if (selected) 2.dp else 1.dp,
                 color = if (selected) ImgColors.AccentViolet else ImgColors.BorderSubtle,
-                shape = RoundedCornerShape(16.dp)
+                shape = RoundedCornerShape(14.dp)
             )
             .combinedClickable(
-                onClick = { onOpen() },
-                onLongClick = { onToggleSelect() }
+                onClick = { onTap() },
+                onLongClick = { onLongPress() }
             )
     ) {
-        AsyncImage(
-            model = request,
-            imageLoader = imageLoader,
-            contentDescription = item.title,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
-        )
         Box(
             modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.80f)),
-                        startY = 120f
-                    )
-                )
-        )
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(8.dp)
-                .size(28.dp)
-                .clip(CircleShape)
-                .background(if (selected) ImgColors.AccentViolet else Color.Black.copy(alpha = 0.55f))
-                .clickable { onToggleSelect() },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = if (selected) Icons.Outlined.Check else Icons.Outlined.RadioButtonUnchecked,
-                contentDescription = "Select image",
-                tint = Color.White,
-                modifier = Modifier.size(16.dp)
-            )
-        }
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .aspectRatio(1.15f)
+                .background(ImgColors.SurfaceElevated)
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = item.title,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = ImgColors.TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                val meta = buildString {
-                    append(item.provider.label)
-                    if (item.width > 0 && item.height > 0) append(" · ${item.width}×${item.height}")
-                }
-                Text(
-                    text = meta,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ImgColors.TextMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+            AsyncImage(
+                model = request,
+                imageLoader = imageLoader,
+                contentDescription = item.title,
+                contentScale = ContentScale.Crop,
+                onError = {
+                    if (!failedPrimary && item.highResUrl.isNotBlank() && currentUrl != item.highResUrl) {
+                        failedPrimary = true
+                        currentUrl = item.highResUrl
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(if (selected) ImgColors.AccentViolet else Color.Black.copy(alpha = 0.55f))
+                    .clickable { onLongPress() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (selected) Icons.Outlined.Check else Icons.Outlined.RadioButtonUnchecked,
+                    contentDescription = "Select",
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
                 )
             }
             if (!selectionMode) {
-                Spacer(Modifier.width(6.dp))
                 Box(
                     modifier = Modifier
-                        .size(34.dp)
-                        .clip(CircleShape)
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(ImgColors.AccentViolet)
-                        .clickable { onQuickHq() },
+                        .clickable { onDownloadHq() }
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.HighQuality,
-                        contentDescription = "Download HQ",
-                        tint = ImgColors.OnAccent,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.HighQuality, contentDescription = "Download HQ", tint = ImgColors.OnAccent, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(3.dp))
+                        Text("HQ", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = ImgColors.OnAccent)
+                    }
                 }
             }
+        }
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                color = ImgColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(2.dp))
+            val sub = buildList {
+                add(item.provider.label)
+                if (item.width > 0 && item.height > 0) add("${item.width}x${item.height}")
+                add(item.inferredExtension().uppercase())
+            }.joinToString(" · ")
+            Text(
+                text = sub,
+                style = MaterialTheme.typography.labelSmall,
+                color = ImgColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
 
 @Composable
-private fun PhotoViewerScreen(
+private fun PixViewerSheet(
     photo: PhotoItem,
     index: Int,
     total: Int,
@@ -679,13 +671,12 @@ private fun PhotoViewerScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(ImgColors.VoidBg)
+            .background(Color.Black)
     ) {
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .background(Color.Black)
         ) {
             AsyncImage(
                 model = photo.highResUrl.ifBlank { photo.previewUrl },
@@ -698,23 +689,34 @@ private fun PhotoViewerScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back", tint = Color.White)
+                Surface(
+                    color = Color.Black.copy(alpha = 0.55f),
+                    shape = CircleShape,
+                    modifier = Modifier.clickable { onBack() }
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                        contentDescription = "Back",
+                        tint = Color.White,
+                        modifier = Modifier.padding(10.dp).size(20.dp)
+                    )
                 }
                 Spacer(Modifier.weight(1f))
-                Text(
-                    text = "${index + 1} / $total",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(ImgColors.SurfaceCard.copy(alpha = 0.85f))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                )
-                Spacer(Modifier.width(8.dp))
+                Surface(
+                    color = Color.Black.copy(alpha = 0.6f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = "${index + 1} / $total",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
                 TextButton(onClick = onPrev, enabled = index > 0) { Text("Prev", color = Color.White) }
                 TextButton(onClick = onNext, enabled = index < total - 1) { Text("Next", color = Color.White) }
             }
@@ -729,57 +731,54 @@ private fun PhotoViewerScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(18.dp)
+                    .padding(horizontal = 18.dp, vertical = 16.dp)
             ) {
                 Text(
                     text = photo.title,
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                     color = ImgColors.TextPrimary,
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.height(4.dp))
-                val details = buildList {
+                val meta = buildList {
                     add(photo.provider.label)
-                    if (photo.width > 0 && photo.height > 0) add("${photo.width}×${photo.height}")
+                    if (photo.width > 0 && photo.height > 0) add("${photo.width}x${photo.height}")
                     add(photo.inferredExtension().uppercase())
                     add(photo.licenseLabel)
                 }.joinToString(" · ")
-                Text(details, style = MaterialTheme.typography.bodySmall, color = ImgColors.TextMuted)
+                Text(meta, style = MaterialTheme.typography.bodySmall, color = ImgColors.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
 
                 Spacer(Modifier.height(14.dp))
                 Button(
                     onClick = { onDownloadHq(photo) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp),
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
                     shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = ImgColors.AccentViolet,
-                        contentColor = ImgColors.OnAccent
-                    )
+                    colors = ButtonDefaults.buttonColors(containerColor = ImgColors.AccentViolet, contentColor = ImgColors.OnAccent)
                 ) {
-                    Icon(Icons.Outlined.HighQuality, contentDescription = null)
+                    Icon(Icons.Outlined.Download, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text("Download HQ", fontWeight = FontWeight.SemiBold)
                 }
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(10.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     OutlinedButton(
                         onClick = {
                             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                             cm.setPrimaryClip(ClipData.newPlainText("imghunt_url", photo.highResUrl))
-                            Toast.makeText(context, "Copied HQ URL", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Copied HQ link", Toast.LENGTH_SHORT).show()
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, ImgColors.BorderSubtle)
                     ) {
-                        Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Outlined.ContentCopy, contentDescription = null, tint = ImgColors.TextPrimary, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Copy URL", color = ImgColors.TextPrimary)
+                        Text("Copy link", color = ImgColors.TextPrimary)
                     }
                     if (photo.sourcePageUrl.startsWith("http")) {
                         OutlinedButton(
@@ -788,11 +787,13 @@ private fun PhotoViewerScreen(
                                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(photo.sourcePageUrl)))
                                 }
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, ImgColors.BorderSubtle)
                         ) {
-                            Icon(Icons.Outlined.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Outlined.OpenInNew, contentDescription = null, tint = ImgColors.TextPrimary, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Source", color = ImgColors.TextPrimary)
+                            Text("Source page", color = ImgColors.TextPrimary)
                         }
                     }
                 }
@@ -802,7 +803,7 @@ private fun PhotoViewerScreen(
 }
 
 @Composable
-private fun FiltersSheetContent(
+private fun PixFilterSheet(
     filters: SearchFilters,
     onUpdate: (SearchFilters) -> Unit,
     onApply: () -> Unit
@@ -811,68 +812,53 @@ private fun FiltersSheetContent(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .padding(horizontal = 20.dp, vertical = 10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Search Filters", style = MaterialTheme.typography.titleLarge, color = ImgColors.TextPrimary, modifier = Modifier.weight(1f))
+            Text("Filters", style = MaterialTheme.typography.titleLarge, color = ImgColors.TextPrimary, modifier = Modifier.weight(1f))
             TextButton(onClick = { onUpdate(SearchFilters(resolution = ResolutionFilter.ANY)) }) {
                 Text("Reset", color = ImgColors.AccentSoft)
             }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
         Text("Resolution", style = MaterialTheme.typography.titleSmall, color = ImgColors.TextMuted)
         Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ResolutionFilter.entries.forEach { rf ->
-                FilterChip(
-                    selected = filters.resolution == rf,
-                    onClick = { onUpdate(filters.copy(resolution = rf)) },
-                    label = { Text(rf.label) }
-                )
+                FilterChip(selected = filters.resolution == rf, onClick = { onUpdate(filters.copy(resolution = rf)) }, label = { Text(rf.label) })
             }
         }
         Spacer(Modifier.height(10.dp))
-        Text("Orientation", style = MaterialTheme.typography.titleSmall, color = ImgColors.TextMuted)
+        Text("Shape", style = MaterialTheme.typography.titleSmall, color = ImgColors.TextMuted)
         Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AspectFilter.entries.forEach { af ->
-                FilterChip(
-                    selected = filters.aspect == af,
-                    onClick = { onUpdate(filters.copy(aspect = af)) },
-                    label = { Text(af.label) }
-                )
+                FilterChip(selected = filters.aspect == af, onClick = { onUpdate(filters.copy(aspect = af)) }, label = { Text(af.label) })
             }
         }
         Spacer(Modifier.height(10.dp))
-        Text("Format & Usage", style = MaterialTheme.typography.titleSmall, color = ImgColors.TextMuted)
+        Text("Format & Rights", style = MaterialTheme.typography.titleSmall, color = ImgColors.TextMuted)
         Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FormatFilter.entries.forEach { ff ->
-                FilterChip(
-                    selected = filters.format == ff,
-                    onClick = { onUpdate(filters.copy(format = ff)) },
-                    label = { Text(ff.label) }
-                )
+                FilterChip(selected = filters.format == ff, onClick = { onUpdate(filters.copy(format = ff)) }, label = { Text(ff.label) })
             }
             LicenseFilter.entries.forEach { lf ->
-                FilterChip(
-                    selected = filters.license == lf,
-                    onClick = { onUpdate(filters.copy(license = lf)) },
-                    label = { Text(lf.label) }
-                )
+                FilterChip(selected = filters.license == lf, onClick = { onUpdate(filters.copy(license = lf)) }, label = { Text(lf.label) })
             }
         }
         Spacer(Modifier.height(16.dp))
         Button(
             onClick = onApply,
             modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
             colors = ButtonDefaults.buttonColors(containerColor = ImgColors.AccentViolet, contentColor = ImgColors.OnAccent)
         ) {
-            Text("Apply Filters", fontWeight = FontWeight.SemiBold)
+            Text("Show results", fontWeight = FontWeight.SemiBold)
         }
         Spacer(Modifier.height(12.dp))
     }
 }
 
 @Composable
-private fun SourcesSettingsSheet(
+private fun PixSourcesSheet(
     enabledProviders: Set<SourceProvider>,
     apiKeys: Map<SourceProvider, String>,
     providerStates: List<ProviderResult>,
@@ -883,14 +869,10 @@ private fun SourcesSettingsSheet(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .padding(horizontal = 20.dp, vertical = 10.dp)
     ) {
         Text("Sources & API Keys", style = MaterialTheme.typography.titleLarge, color = ImgColors.TextPrimary)
-        Text(
-            "Open APIs work out of the box; optional API keys unlock Unsplash, Pexels, and Pixabay.",
-            style = MaterialTheme.typography.bodySmall,
-            color = ImgColors.TextMuted
-        )
+        Text("Open sources run automatically; add optional keys for Unsplash, Pexels, or Pixabay.", style = MaterialTheme.typography.bodySmall, color = ImgColors.TextMuted)
         Spacer(Modifier.height(10.dp))
         LazyColumn(modifier = Modifier.height(420.dp)) {
             items(SourceProvider.entries, key = { it.name }) { p ->
@@ -908,9 +890,9 @@ private fun SourcesSettingsSheet(
                             }
                             val sub = when {
                                 state?.error != null -> "Error: ${state.error}"
-                                state != null -> "${state.items.size} items${if (state.usedFallback) " (fallback)" else ""}"
+                                state != null -> "${state.items.size} found${if (state.usedFallback) " · fallback" else ""}"
                                 p.requiresKey -> "Optional API key"
-                                else -> "Ready (no key required)"
+                                else -> "Open API"
                             }
                             Text(sub, style = MaterialTheme.typography.labelSmall, color = if (state?.error != null) ImgColors.Danger else ImgColors.TextMuted)
                         }
@@ -944,13 +926,13 @@ private fun SourcesSettingsSheet(
 }
 
 @Composable
-private fun DownloadsListScreen(
+private fun DownloadsTabContent(
     records: List<DownloadRecord>,
     onClearFinished: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Saved HQ Queue", style = MaterialTheme.typography.titleMedium, color = ImgColors.TextPrimary, modifier = Modifier.weight(1f))
+            Text("Queue", style = MaterialTheme.typography.titleMedium, color = ImgColors.TextPrimary, modifier = Modifier.weight(1f))
             if (records.any { it.status == "done" || it.status == "failed" }) {
                 TextButton(onClick = onClearFinished) {
                     Icon(Icons.Outlined.DeleteSweep, contentDescription = null, tint = ImgColors.AccentSoft, modifier = Modifier.size(18.dp))
@@ -961,7 +943,7 @@ private fun DownloadsListScreen(
         }
         if (records.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No downloads yet. Tap HQ on any image.", color = ImgColors.TextMuted)
+                Text("No downloads yet. Tap HQ on any photo.", color = ImgColors.TextMuted)
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -969,12 +951,10 @@ private fun DownloadsListScreen(
                     Surface(
                         color = ImgColors.SurfaceCard,
                         shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, ImgColors.BorderSubtle),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             val (icon, tint) = when (rec.status) {
                                 "done" -> Icons.Outlined.CheckCircle to ImgColors.Success
                                 "failed" -> Icons.Outlined.ErrorOutline to ImgColors.Danger
@@ -985,8 +965,8 @@ private fun DownloadsListScreen(
                             Column(Modifier.weight(1f)) {
                                 Text(rec.fileName, style = MaterialTheme.typography.bodyMedium, color = ImgColors.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 val info = when (rec.status) {
-                                    "done" -> "Saved to Pictures/ImgHunt (${rec.provider})"
-                                    "failed" -> rec.error ?: "Download failed"
+                                    "done" -> "Saved to Pictures/ImgHunt · ${rec.provider}"
+                                    "failed" -> rec.error ?: "Failed"
                                     else -> "${rec.provider} · ${rec.status}"
                                 }
                                 Text(info, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis)
